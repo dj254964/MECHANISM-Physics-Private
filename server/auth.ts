@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { db, DEFAULT_USER_ID } from './db.ts';
 
 export interface PrivateSession {
