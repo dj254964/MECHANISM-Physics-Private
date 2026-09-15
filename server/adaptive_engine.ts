@@ -433,8 +433,20 @@ export const CURATED_DIAGNOSTIC_QUESTIONS: Question[] = [
  * Initializes or updates user model in database with hierarchical error tracking
  */
 export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
-  const row = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
   const now = new Date().toISOString();
+
+  // Ensure user exists in users table to satisfy foreign key constraints
+  const userCheck = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+  if (!userCheck) {
+    db.prepare('INSERT OR IGNORE INTO users (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)').run(
+      userId,
+      userId === DEFAULT_USER_ID ? 'BSc Physics Scholar' : userId,
+      now,
+      now
+    );
+  }
+
+  const row = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
 
   if (row) {
     let existingErrors: HierarchicalReasoningError[] = [];
@@ -462,11 +474,20 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
     // If no row exists, initialize the user model
     db.prepare(`
       INSERT INTO user_model (
-        user_id, error_profile, confidence_calibration, cognitive_resource,
-        topic_mastery, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        id, user_id, reasoning_profile, error_profile, confidence_calibration, cognitive_resource_allocation,
+        topic_mastery, recommended_difficulty, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      'model_' + userId,
       userId,
+      JSON.stringify({
+        first_principles_index: null,
+        causal_precision: null,
+        directionality_integrity: null,
+        discriminator_acuity: null,
+        exception_awareness: null,
+        anti_overanalysis_score: null,
+      }),
       JSON.stringify(INITIAL_HIERARCHICAL_ERRORS),
       JSON.stringify({
         brier_score: 0.18,
@@ -494,6 +515,7 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
         top_carnot_entropy: { mastery_score: 40, tests_taken: 0, last_tested: now },
         top_maxwell_boundary: { mastery_score: 35, tests_taken: 0, last_tested: now },
       }),
+      'Mechanistic',
       now
     );
   }
