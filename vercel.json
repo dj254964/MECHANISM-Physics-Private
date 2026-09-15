@@ -6,7 +6,7 @@
       "destination": "/api"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/|assets/|branding/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

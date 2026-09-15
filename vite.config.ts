@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: process.env.VITE_BASE_PATH || (process.env.NODE_ENV === 'production' || process.env.GITHUB_PAGES ? '/MECHANISM-Physics-Private/' : '/'),
+    base: process.env.VITE_BASE_PATH || (process.env.GITHUB_PAGES === 'true' ? '/MECHANISM-Physics-Private/' : '/'),
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
