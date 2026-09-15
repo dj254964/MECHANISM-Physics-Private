@@ -1,0 +1,8 @@
+{
+  "name": "MECHANISM - Phy Private ",
+  "description": "Personalized reasoning-first Physics learning system and physics cognition laboratory",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

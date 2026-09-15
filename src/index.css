@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-mech-navy-950: #07080c;
+  --color-mech-navy-900: #0c0e16;
+  --color-mech-navy-850: #101420;
+  --color-mech-navy-800: #141826;
+  --color-mech-navy-700: #1c2236;
+  --color-mech-navy-600: #26304d;
+
+  --color-mech-cyan: #38bdf8;
+  --color-mech-blue: #3b82f6;
+  --color-mech-indigo: #6366f1;
+  --color-mech-violet: #8b5cf6;
+  --color-mech-purple: #a855f7;
+
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    --mech-bg: #f8fafc;
+    --mech-bg-secondary: #f1f5f9;
+    --mech-surface: #ffffff;
+    --mech-surface-elev: #f8fafc;
+    --mech-border: rgba(148, 163, 184, 0.25);
+    --mech-text-primary: #0f172a;
+    --mech-text-secondary: #475569;
+    --mech-text-muted: #64748b;
+  }
+
+  .dark {
+    --mech-bg: #07080c;
+    --mech-bg-secondary: #0c0e16;
+    --mech-surface: #0f121d;
+    --mech-surface-elev: #141826;
+    --mech-border: rgba(255, 255, 255, 0.08);
+    --mech-text-primary: #f1f5f9;
+    --mech-text-secondary: #94a3b8;
+    --mech-text-muted: #64748b;
+  }
+
+  body {
+    @apply antialiased text-slate-900 dark:text-slate-100 bg-[#f8fafc] dark:bg-[#07080c] font-sans selection:bg-cyan-500/20 selection:text-cyan-300;
+  }
+
+  /* Typography defaults: modern sans-serif headings rather than heavy academic serif */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-sans tracking-tight text-slate-900 dark:text-slate-100;
+  }
+}
+
+/* NOIR SYSTEM STYLING & MICRO-INTERACTIONS */
+.noir-panel {
+  background-color: rgba(12, 14, 22, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04), 0 8px 32px -4px rgba(0, 0, 0, 0.6);
+}
+
+.noir-card {
+  background-color: #0c0e16;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.03);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s ease,
+              background-color 0.2s ease,
+              box-shadow 0.2s ease;
+}
+
+.noir-card:hover {
+  transform: translateY(-2px);
+  background-color: #101420;
+  border-color: rgba(56, 189, 248, 0.28);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06), 0 8px 24px -4px rgba(0, 0, 0, 0.65);
+}
+
+.noir-card-subtle {
+  background-color: #090b10;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.18s ease,
+              background-color 0.18s ease;
+}
+
+.noir-card-subtle:hover {
+  transform: translateY(-1.5px);
+  background-color: #0e111a;
+  border-color: rgba(56, 189, 248, 0.22);
+}
+
+.noir-metric {
+  background-color: #0c0e16;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.2s ease,
+              border-color 0.2s ease,
+              box-shadow 0.2s ease;
+}
+
+.noir-metric:hover {
+  transform: translateY(-1.5px);
+  background-color: #101420;
+  border-color: rgba(56, 189, 248, 0.3);
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+.noir-button {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.15s ease,
+              background-color 0.15s ease,
+              box-shadow 0.15s ease;
+}
+
+.noir-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 0 2px 10px -1px rgba(56, 189, 248, 0.15);
+}
+
+.noir-input {
+  background-color: #07080c;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.noir-input:focus {
+  background-color: #0c0e16;
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.2);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .noir-card,
+  .noir-card-subtle,
+  .noir-metric,
+  .noir-button {
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+/* Subtle transitions for controls and borders */
+.hover-contrast {
+  transition: all 0.15s ease-in-out;
+}
+
+/* Custom scrollbar matching dark navy aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.35);
+}
+
+/* Private Login Fluid Gradient Waves & Atmospheric Background */
+@keyframes fluidWaveA {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.7;
+  }
+  33% {
+    transform: translate(40px, -30px) scale(1.08);
+    opacity: 0.85;
+  }
+  66% {
+    transform: translate(-30px, 40px) scale(0.95);
+    opacity: 0.65;
+  }
+}
+
+@keyframes fluidWaveB {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.65;
+  }
+  33% {
+    transform: translate(-50px, 35px) scale(1.1);
+    opacity: 0.8;
+  }
+  66% {
+    transform: translate(45px, -25px) scale(0.96);
+    opacity: 0.6;
+  }
+}
+
+@keyframes fluidWaveC {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translate(35px, 45px) scale(1.06);
+    opacity: 0.75;
+  }
+}
+
+.animate-fluid-wave-a {
+  animation: fluidWaveA 28s ease-in-out infinite;
+}
+
+.animate-fluid-wave-b {
+  animation: fluidWaveB 34s ease-in-out infinite;
+}
+
+.animate-fluid-wave-c {
+  animation: fluidWaveC 40s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fluid-wave-a,
+  .animate-fluid-wave-b,
+  .animate-fluid-wave-c {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+

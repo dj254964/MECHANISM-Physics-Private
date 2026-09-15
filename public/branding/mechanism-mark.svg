@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Left vertical stem (lower segment) -->
+    <linearGradient id="mech-grad-left-stem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0ea5e9" />
+      <stop offset="35%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+
+    <!-- Upper-left shoulder and descending diagonal ribbon -->
+    <linearGradient id="mech-grad-left-diag" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="20%" stop-color="#0ea5e9" />
+      <stop offset="55%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+
+    <!-- Right continuous folded ribbon (indigo to vibrant violet) -->
+    <linearGradient id="mech-grad-right-ribbon" x1="0.1" y1="0.9" x2="0.9" y2="0.1">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="15%" stop-color="#4f46e5" />
+      <stop offset="45%" stop-color="#6366f1" />
+      <stop offset="75%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+
+    <!-- Right stem vertical continuation -->
+    <linearGradient id="mech-grad-right-stem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a855f7" />
+      <stop offset="40%" stop-color="#8b5cf6" />
+      <stop offset="80%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+
+    <!-- Precise realistic drop shadow for the overlapping ribbon fold -->
+    <filter id="mech-fold-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="-4" dy="5" stdDeviation="5.5" flood-color="#0f172a" flood-opacity="0.48" />
+    </filter>
+
+    <!-- Subtle surface sheen on left shoulder -->
+    <linearGradient id="mech-sheen-left" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.32" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Subtle surface sheen on right shoulder -->
+    <linearGradient id="mech-sheen-right" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <g id="mechanism-mark-root" fill="none" fill-rule="evenodd">
+    <!-- 1. Lower Left Vertical Stem -->
+    <path id="stem-left"
+      d="M 122 204
+         L 122 345
+         A 27 27 0 0 0 176 345
+         L 176 246
+         Z"
+      fill="url(#mech-grad-left-stem)"
+    />
+
+    <!-- 2. Left Upper Shoulder & Descending Diagonal Ribbon -->
+    <path id="ribbon-left"
+      d="M 122 204
+         L 122 169
+         A 27 27 0 0 1 149 142
+         C 178 142 214 170 256 226
+         C 266 240 274 254 278 268
+         L 266 294
+         C 252 298 238 292 222 278
+         C 198 256 176 246 176 246
+         Z"
+      fill="url(#mech-grad-left-diag)"
+    />
+
+    <!-- Left shoulder highlight sheen -->
+    <path id="sheen-left"
+      d="M 122 169
+         A 27 27 0 0 1 149 142
+         C 166 142 186 152 208 172
+         L 196 188
+         C 178 172 160 164 149 164
+         A 13 13 0 0 0 135 177
+         L 135 198
+         L 122 204
+         Z"
+      fill="url(#mech-sheen-left)"
+    />
+
+    <!-- 3. Overlapping Right Ribbon with Fold Shadow -->
+    <g id="ribbon-right-group">
+      <path id="ribbon-right"
+        filter="url(#mech-fold-shadow)"
+        d="M 256 226
+           C 238 240 224 254 228 272
+           C 232 288 246 296 266 296
+           C 300 296 328 240 363 142
+           A 27 27 0 0 1 390 169
+           L 390 345
+           A 27 27 0 0 1 336 345
+           L 336 198
+           C 316 222 288 244 256 226
+           Z"
+        fill="url(#mech-grad-right-ribbon)"
+      />
+    </g>
+
+    <!-- Right shoulder highlight sheen -->
+    <path id="sheen-right"
+      d="M 363 142
+         A 27 27 0 0 1 390 169
+         L 390 196
+         L 377 189
+         L 377 172
+         A 14 14 0 0 0 363 158
+         C 348 158 334 170 320 184
+         L 311 170
+         C 330 152 348 142 363 142
+         Z"
+      fill="url(#mech-sheen-right)"
+    />
+  </g>
+</svg>
