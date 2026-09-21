@@ -7,6 +7,7 @@ import {
   AdaptiveEvidence,
   NextBestTask,
   LearningMode,
+  UserModel,
 } from '../src/types.ts';
 import { db, DEFAULT_USER_ID } from './db.ts';
 import { queryGemini, CURRENT_MODEL } from './gemini.ts';
@@ -432,13 +433,14 @@ export const CURATED_DIAGNOSTIC_QUESTIONS: Question[] = [
 /**
  * Initializes or updates user model in database with hierarchical error tracking
  */
-export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
+export async function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID): Promise<void> {
   const now = new Date().toISOString();
 
   // Ensure user exists in users table to satisfy foreign key constraints
-  const userCheck = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+  const userCheck = await db.get('SELECT id FROM users WHERE id = ?', userId);
   if (!userCheck) {
-    db.prepare('INSERT OR IGNORE INTO users (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)').run(
+    await db.run(
+      'INSERT INTO users (id, name, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       userId,
       userId === DEFAULT_USER_ID ? 'BSc Physics Scholar' : userId,
       now,
@@ -446,7 +448,7 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
     );
   }
 
-  const row = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
+  const row = await db.get('SELECT * FROM user_model WHERE user_id = ?', userId) as any;
 
   if (row) {
     let existingErrors: HierarchicalReasoningError[] = [];
@@ -456,7 +458,8 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
         existingErrors = parsed;
       } else {
         existingErrors = INITIAL_HIERARCHICAL_ERRORS;
-        db.prepare('UPDATE user_model SET error_profile = ?, updated_at = ? WHERE user_id = ?').run(
+        await db.run(
+          'UPDATE user_model SET error_profile = ?, updated_at = ? WHERE user_id = ?',
           JSON.stringify(existingErrors),
           now,
           userId
@@ -464,7 +467,8 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
       }
     } catch {
       existingErrors = INITIAL_HIERARCHICAL_ERRORS;
-      db.prepare('UPDATE user_model SET error_profile = ?, updated_at = ? WHERE user_id = ?').run(
+      await db.run(
+        'UPDATE user_model SET error_profile = ?, updated_at = ? WHERE user_id = ?',
         JSON.stringify(existingErrors),
         now,
         userId
@@ -472,12 +476,11 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
     }
   } else {
     // If no row exists, initialize the user model
-    db.prepare(`
-      INSERT INTO user_model (
+    await db.run(
+      `INSERT INTO user_model (
         id, user_id, reasoning_profile, error_profile, confidence_calibration, cognitive_resource_allocation,
         topic_mastery, recommended_difficulty, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'model_' + userId,
       userId,
       JSON.stringify({
@@ -522,15 +525,14 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
 
   // Ensure initial questions exist in questions table
   for (const q of CURATED_DIAGNOSTIC_QUESTIONS) {
-    const check = db.prepare('SELECT id FROM questions WHERE id = ?').get(q.id);
+    const check = await db.get('SELECT id FROM questions WHERE id = ?', q.id);
     if (!check) {
-      db.prepare(`
-        INSERT INTO questions (
+      await db.run(
+        `INSERT INTO questions (
           id, topic_id, mode, question_text, options, correct_answer,
           explanation, reasoning_target, difficulty, scenario_vignette, clinical_vignette, discriminator_note,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
         q.id,
         q.topic_id,
         q.mode,
@@ -554,13 +556,13 @@ export function ensureAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
  * formatted for cross-context adaptation across all webapp tools (Doubt Chat,
  * Compressor, Adversarial, First Principles, Reverse Engineering, Simulation, Reconstruction, Tests).
  */
-export function getUserCognitiveFlawSummary(userId: string = DEFAULT_USER_ID): {
+export async function getUserCognitiveFlawSummary(userId: string = DEFAULT_USER_ID): Promise<{
   primary_weakness: string;
   flaws: HierarchicalReasoningError[];
   prompt_injection: string;
-} {
-  ensureAdaptiveUserModel(userId);
-  const userModelRow = db.prepare('SELECT error_profile FROM user_model WHERE user_id = ?').get(userId) as any;
+}> {
+  await ensureAdaptiveUserModel(userId);
+  const userModelRow = await db.get('SELECT error_profile FROM user_model WHERE user_id = ?', userId) as any;
   let errors: HierarchicalReasoningError[] = INITIAL_HIERARCHICAL_ERRORS;
   if (userModelRow?.error_profile) {
     try {
@@ -638,7 +640,7 @@ export interface EvidenceStrengthCalculationParams {
   userId?: string;
 }
 
-export function calculateEvidenceStrength(params: EvidenceStrengthCalculationParams): number {
+export async function calculateEvidenceStrength(params: EvidenceStrengthCalculationParams): Promise<number> {
   const {
     feature,
     confidence,
@@ -717,11 +719,11 @@ export function calculateEvidenceStrength(params: EvidenceStrengthCalculationPar
 
   if (errorId) {
     try {
-      const priorRows = db.prepare(`
+      const priorRows = await db.all(`
         SELECT feature, topic_id, correct_answer, correct_reasoning
         FROM adaptive_evidence
         WHERE user_id = ? AND error_id = ?
-      `).all(userId, errorId) as Array<{ feature: string; topic_id?: string; correct_answer?: number; correct_reasoning?: number }>;
+      `, userId, errorId) as Array<{ feature: string; topic_id?: string; correct_answer?: number; correct_reasoning?: number }>;
 
       if (priorRows.length > 0) {
         const priorMistakes = priorRows.filter((r) => r.correct_answer === 0 || r.correct_reasoning === 0).length;
@@ -757,15 +759,15 @@ export function calculateEvidenceStrength(params: EvidenceStrengthCalculationPar
  * - Selected Topic
  * - Current Learning Mode
  */
-export function deriveNextBestTask(params: {
+export async function deriveNextBestTask(params: {
   userId?: string;
   selectedTopicId?: string;
   currentMode?: string;
-}): NextBestTask {
+}): Promise<NextBestTask> {
   const userId = params.userId || DEFAULT_USER_ID;
-  ensureAdaptiveUserModel(userId);
+  await ensureAdaptiveUserModel(userId);
 
-  const userModelRow = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
+  const userModelRow = await db.get('SELECT * FROM user_model WHERE user_id = ?', userId) as any;
   let errors: HierarchicalReasoningError[] = INITIAL_HIERARCHICAL_ERRORS;
   let topicMastery: Record<string, any> = {};
   let calibration: any = {};
@@ -780,16 +782,16 @@ export function deriveNextBestTask(params: {
     } catch {}
   }
 
-  const topics = db.prepare('SELECT * FROM topics').all() as any[];
+  const topics = await db.all('SELECT * FROM topics') as any[];
   const topicMap = new Map<string, any>(topics.map((t) => [t.id, t]));
 
   // Query recent adaptive evidence (last 15 items)
-  const recentEvidence = db.prepare(`
+  const recentEvidence = await db.all(`
     SELECT * FROM adaptive_evidence
     WHERE user_id = ?
     ORDER BY created_at DESC
     LIMIT 15
-  `).all(userId) as any[];
+  `, userId) as any[];
 
   // Selected topic resolution
   let effectiveTopic = topics[0] || { id: 'top_damped_oscillator', name: 'Damped & Driven Harmonic Oscillators' };
@@ -987,18 +989,18 @@ export function deriveNextBestTask(params: {
  * It persists evidence, updates the hierarchical error and personal models,
  * and invalidates/recalculates the recommended next best task.
  */
-export function processAdaptiveEvidence(evidenceInput: Partial<AdaptiveEvidence> & {
+export async function processAdaptiveEvidence(evidenceInput: Partial<AdaptiveEvidence> & {
   user_id?: string;
   feature: string;
   evidence_summary: string;
-}): AdaptiveEvidence {
+}): Promise<AdaptiveEvidence> {
   const userId = evidenceInput.user_id || DEFAULT_USER_ID;
   const id = evidenceInput.id || 'ev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const now = evidenceInput.created_at || new Date().toISOString();
 
   const strength = evidenceInput.evidence_strength != null
     ? evidenceInput.evidence_strength
-    : calculateEvidenceStrength({
+    : await calculateEvidenceStrength({
         feature: evidenceInput.feature,
         confidence: evidenceInput.confidence,
         isCorrect: evidenceInput.correct_answer,
@@ -1031,14 +1033,14 @@ export function processAdaptiveEvidence(evidenceInput: Partial<AdaptiveEvidence>
     created_at: now,
   };
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO adaptive_evidence (
       id, user_id, feature, topic_id, error_id,
       correct_answer, correct_reasoning, robust_mechanism, transferable_mastery,
       confidence, time_taken_sec, discriminator_identified, reconstruction_score,
       evidence_strength, evidence_summary, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
     fullEvidence.id,
     fullEvidence.user_id,
     fullEvidence.feature,
@@ -1058,7 +1060,7 @@ export function processAdaptiveEvidence(evidenceInput: Partial<AdaptiveEvidence>
   );
 
   // Central model update & recommended task cache invalidation/recalculation
-  computeAdaptiveUserModel(userId);
+  await computeAdaptiveUserModel(userId);
 
   return fullEvidence;
 }
@@ -1067,31 +1069,31 @@ export function processAdaptiveEvidence(evidenceInput: Partial<AdaptiveEvidence>
  * Computes the complete adaptive user model strictly from empirical evidence.
  * Integrates question attempts, evaluations, reconstructions, and central adaptive_evidence.
  */
-export function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
-  ensureAdaptiveUserModel(userId);
+export async function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID): Promise<any> {
+  await ensureAdaptiveUserModel(userId);
 
-  const attempts = db.prepare(`
+  const attempts = await db.all(`
     SELECT qa.*, q.mode as q_mode, q.topic_id as q_topic_id, q.reasoning_target as q_reasoning_target, q.difficulty as q_difficulty
     FROM question_attempts qa
     LEFT JOIN questions q ON qa.question_id = q.id
     WHERE qa.user_id = ?
     ORDER BY qa.created_at ASC
-  `).all(userId) as any[];
+  `, userId) as any[];
 
-  const evaluations = db.prepare(`
+  const evaluations = await db.all(`
     SELECT * FROM mechanism_evaluations ORDER BY created_at ASC
-  `).all() as any[];
+  `) as any[];
 
-  const reconstructions = db.prepare(`
+  const reconstructions = await db.all(`
     SELECT * FROM reconstructions ORDER BY created_at ASC
-  `).all() as any[];
+  `) as any[];
 
-  const evidences = db.prepare(`
+  const evidences = await db.all(`
     SELECT * FROM adaptive_evidence WHERE user_id = ? ORDER BY created_at ASC
-  `).all(userId) as any[];
+  `, userId) as any[];
 
-  const topics = db.prepare('SELECT * FROM topics').all() as any[];
-  const userModelRow = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
+  const topics = await db.all('SELECT * FROM topics') as any[];
+  const userModelRow = await db.get('SELECT * FROM user_model WHERE user_id = ?', userId) as any;
 
   // Initial Unassessed State (0 attempts, 0 evaluations, 0 reconstructions, 0 evidences)
   if (attempts.length === 0 && evaluations.length === 0 && reconstructions.length === 0 && evidences.length === 0) {
@@ -1152,7 +1154,7 @@ export function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
       target_weakness: 'Unassessed Baseline',
     };
 
-    const nextBestTask = deriveNextBestTask({ userId });
+    const nextBestTask = await deriveNextBestTask({ userId });
 
     return {
       id: userModelRow?.id || 'model_' + userId,
@@ -1485,7 +1487,7 @@ export function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
   };
 
   // 6. Next Best Task (Deriving dynamically on demand)
-  const nextBestTask = deriveNextBestTask({ userId });
+  const nextBestTask = await deriveNextBestTask({ userId });
   const recommendedTest = {
     mode: (nextBestTask.test_mode || 'weakness_hunt') as any,
     title: nextBestTask.title,
@@ -1541,7 +1543,7 @@ export function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
     }));
 
   const now = new Date().toISOString();
-  db.prepare(`
+  await db.run(`
     UPDATE user_model SET
       reasoning_profile = ?,
       topic_mastery = ?,
@@ -1550,7 +1552,7 @@ export function computeAdaptiveUserModel(userId: string = DEFAULT_USER_ID) {
       cognitive_resource_allocation = ?,
       updated_at = ?
     WHERE user_id = ?
-  `).run(
+  `,
     JSON.stringify(reasoningProfile),
     JSON.stringify(topicMastery),
     JSON.stringify(updatedErrors),
@@ -1599,9 +1601,9 @@ export async function selectAdaptiveQuestion(params: {
   userId?: string;
 }): Promise<Question> {
   const userId = params.userId || DEFAULT_USER_ID;
-  ensureAdaptiveUserModel(userId);
+  await ensureAdaptiveUserModel(userId);
 
-  const userModelRow = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
+  const userModelRow = await db.get('SELECT * FROM user_model WHERE user_id = ?', userId) as any;
   let errors: HierarchicalReasoningError[] = INITIAL_HIERARCHICAL_ERRORS;
   if (userModelRow?.error_profile) {
     try {
@@ -1615,12 +1617,12 @@ export async function selectAdaptiveQuestion(params: {
   }
 
   // Fetch recent attempts to avoid immediate repetition
-  const recentAttempts = db.prepare(`
+  const recentAttempts = await db.all(`
     SELECT question_id FROM question_attempts
     WHERE user_id = ?
     ORDER BY created_at DESC
     LIMIT 6
-  `).all(userId) as Array<{ question_id: string }>;
+  `, userId) as Array<{ question_id: string }>;
   const recentQIds = new Set(recentAttempts.map((a) => a.question_id));
 
   // Determine priority error target
@@ -1870,13 +1872,13 @@ OUTPUT STRICT VALID JSON ONLY (no markdown formatting, no code fence):
     };
 
     // Store generated question in database for persistence
-    db.prepare(`
+    await db.run(`
       INSERT INTO questions (
         id, topic_id, mode, question_text, options, correct_answer,
         explanation, reasoning_target, difficulty, scenario_vignette, clinical_vignette, discriminator_note,
         created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       newQ.id,
       newQ.topic_id,
       newQ.mode,
@@ -1916,12 +1918,12 @@ export async function evaluateAdaptiveAttempt(params: {
   user_id?: string;
 }): Promise<CognitiveEvaluation> {
   const userId = params.user_id || DEFAULT_USER_ID;
-  ensureAdaptiveUserModel(userId);
+  await ensureAdaptiveUserModel(userId);
 
   // Find question in curated list or database
   let q = CURATED_DIAGNOSTIC_QUESTIONS.find((item) => item.id === params.question_id);
   if (!q) {
-    const row = db.prepare('SELECT * FROM questions WHERE id = ?').get(params.question_id) as any;
+    const row = await db.get('SELECT * FROM questions WHERE id = ?', params.question_id) as any;
     if (row) {
       const opts = JSON.parse(row.options || '[]');
       q = {
@@ -1944,7 +1946,7 @@ export async function evaluateAdaptiveAttempt(params: {
   const timeTaken = params.time_taken || 25;
 
   // Load current user model
-  const userModelRow = db.prepare('SELECT * FROM user_model WHERE user_id = ?').get(userId) as any;
+  const userModelRow = await db.get('SELECT * FROM user_model WHERE user_id = ?', userId) as any;
   let errors: HierarchicalReasoningError[] = INITIAL_HIERARCHICAL_ERRORS;
   let calibration = {
     brier_score: 0.16,
@@ -2213,7 +2215,7 @@ OUTPUT STRICT JSON ONLY (no markdown fences):
 
   // Persist updated user model in database
   const now = new Date().toISOString();
-  db.prepare('UPDATE user_model SET error_profile = ?, confidence_calibration = ?, updated_at = ? WHERE user_id = ?').run(
+  await db.run('UPDATE user_model SET error_profile = ?, confidence_calibration = ?, updated_at = ? WHERE user_id = ?',
     JSON.stringify(errors),
     JSON.stringify(calibration),
     now,
@@ -2222,12 +2224,12 @@ OUTPUT STRICT JSON ONLY (no markdown fences):
 
   // Record attempt in question_attempts
   const attId = 'q_att_' + Date.now();
-  db.prepare(`
+  await db.run(`
     INSERT INTO question_attempts (
       id, user_id, question_id, answer, correct, confidence,
       reasoning, reasoning_error, time_taken, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
     attId,
     userId,
     q.id,
@@ -2245,7 +2247,7 @@ OUTPUT STRICT JSON ONLY (no markdown fences):
     ? `Test Attempt on "${q.topic_name || q.id}": Defended mechanism. Reasoning quality: ${reasoningQualityScore}%, stated confidence: ${confidenceVal}%, time: ${timeTaken}s.`
     : `Test Attempt on "${q.topic_name || q.id}": Manifested root error "${targetError.name}". Stated confidence: ${confidenceVal}%, time: ${timeTaken}s. Discriminator entrapment: ${q.discriminator_note || 'Bypassed critical physical discriminator.'}`;
 
-  const emittedEvidence = processAdaptiveEvidence({
+  const emittedEvidence = await processAdaptiveEvidence({
     user_id: userId,
     feature: 'mcq_test',
     topic_id: q.topic_id,
@@ -2264,7 +2266,7 @@ OUTPUT STRICT JSON ONLY (no markdown fences):
   });
 
   // Recalculate adaptive user model with new empirical evidence
-  const updatedModel = computeAdaptiveUserModel(userId);
+  const updatedModel = await computeAdaptiveUserModel(userId);
 
   return {
     correct: isCorrect,

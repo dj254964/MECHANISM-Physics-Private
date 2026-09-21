@@ -1,378 +1,755 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import pg from 'pg';
 
-// Ensure data directory exists
-const dataDir = path.resolve(process.cwd(), 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const { Pool } = pg;
+
+export const isVercel = Boolean(process.env.VERCEL);
+export const databaseUrl = process.env.DATABASE_URL;
+
+// Important serverless rule: Vercel runtime must NEVER fall back to SQLite
+if (isVercel && !databaseUrl) {
+  throw new Error(
+    'CRITICAL SERVERLESS PERSISTENCE ERROR: Running on Vercel production without DATABASE_URL. Please connect the Neon PostgreSQL integration in Vercel project settings.'
+  );
 }
 
-const dbPath = path.join(dataDir, 'mechanism.db');
-export const db = new DatabaseSync(dbPath);
+export const isPostgres = Boolean(databaseUrl);
 
-// Initialize schema and tables
-export function initDatabase() {
-  db.exec('PRAGMA foreign_keys = ON;');
+let sqliteDb: DatabaseSync | null = null;
+let pgPool: pg.Pool | null = null;
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS subjects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      code TEXT NOT NULL UNIQUE,
-      icon TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS topics (
-      id TEXT PRIMARY KEY,
-      subject_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      chapter TEXT,
-      description TEXT,
-      FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS learning_sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      topic_id TEXT,
-      mode TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS mechanisms (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      topic_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      user_explanation TEXT,
-      canonical_mechanism TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS mechanism_evaluations (
-      id TEXT PRIMARY KEY,
-      mechanism_id TEXT,
-      session_id TEXT,
-      causal_accuracy REAL NOT NULL,
-      completeness REAL NOT NULL,
-      directionality REAL NOT NULL,
-      assumption_quality REAL NOT NULL,
-      discriminator_quality REAL NOT NULL,
-      exception_handling REAL NOT NULL,
-      compression_quality REAL NOT NULL,
-      alternative_mechanism_quality REAL NOT NULL,
-      confidence REAL NOT NULL,
-      overall_score REAL NOT NULL,
-      evaluator_feedback TEXT NOT NULL,
-      weakest_link TEXT,
-      what_is_correct TEXT,
-      attack_details TEXT,
-      distinguishing_observation TEXT,
-      repaired_model TEXT,
-      compressed_mechanism TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(mechanism_id) REFERENCES mechanisms(id) ON DELETE CASCADE,
-      FOREIGN KEY(session_id) REFERENCES learning_sessions(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS errors (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      description TEXT NOT NULL,
-      severity TEXT NOT NULL,
-      frequency INTEGER NOT NULL DEFAULT 1,
-      first_seen TEXT NOT NULL,
-      last_seen TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS mechanism_errors (
-      id TEXT PRIMARY KEY,
-      evaluation_id TEXT NOT NULL,
-      error_id TEXT NOT NULL,
-      FOREIGN KEY(evaluation_id) REFERENCES mechanism_evaluations(id) ON DELETE CASCADE,
-      FOREIGN KEY(error_id) REFERENCES errors(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS questions (
-      id TEXT PRIMARY KEY,
-      topic_id TEXT NOT NULL,
-      mode TEXT NOT NULL,
-      question_text TEXT NOT NULL,
-      options TEXT NOT NULL,
-      correct_answer TEXT NOT NULL,
-      explanation TEXT NOT NULL,
-      reasoning_target TEXT NOT NULL,
-      difficulty TEXT NOT NULL,
-      clinical_vignette TEXT,
-      scenario_vignette TEXT,
-      discriminator_note TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS question_attempts (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      question_id TEXT NOT NULL,
-      answer TEXT NOT NULL,
-      correct INTEGER NOT NULL,
-      confidence INTEGER NOT NULL,
-      reasoning TEXT,
-      reasoning_error TEXT,
-      time_taken INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS simulations (
-      id TEXT PRIMARY KEY,
-      topic_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      scenario TEXT NOT NULL,
-      hidden_state TEXT NOT NULL,
-      difficulty TEXT NOT NULL,
-      patient_presentation TEXT,
-      system_presentation TEXT,
-      available_investigations TEXT,
-      available_decisions TEXT,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS simulation_attempts (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      simulation_id TEXT NOT NULL,
-      hypotheses TEXT NOT NULL,
-      evidence_used TEXT NOT NULL,
-      decisions TEXT NOT NULL,
-      confidence INTEGER NOT NULL,
-      outcome TEXT NOT NULL,
-      model_update TEXT,
-      unnecessary_investigations_count INTEGER DEFAULT 0,
-      overanalyzed INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(simulation_id) REFERENCES simulations(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS reconstructions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      topic_id TEXT NOT NULL,
-      source_mechanism TEXT NOT NULL,
-      user_reconstruction TEXT NOT NULL,
-      evaluation TEXT NOT NULL,
-      score REAL NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS user_model (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL UNIQUE,
-      reasoning_profile TEXT NOT NULL,
-      topic_mastery TEXT NOT NULL,
-      error_profile TEXT NOT NULL,
-      confidence_calibration TEXT NOT NULL,
-      cognitive_resource_allocation TEXT NOT NULL,
-      recommended_difficulty TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS chat_conversations (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      topic_id TEXT,
-      title TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      model TEXT NOT NULL,
-      classification TEXT,
-      metadata TEXT,
-      attachments TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS adaptive_evidence (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      feature TEXT NOT NULL,
-      topic_id TEXT,
-      error_id TEXT,
-      correct_answer INTEGER,
-      correct_reasoning INTEGER,
-      robust_mechanism INTEGER,
-      transferable_mastery INTEGER,
-      confidence INTEGER,
-      time_taken_sec REAL,
-      discriminator_identified INTEGER,
-      reconstruction_score REAL,
-      evidence_strength REAL NOT NULL,
-      evidence_summary TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL,
-      FOREIGN KEY(error_id) REFERENCES errors(id) ON DELETE SET NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_user ON adaptive_evidence(user_id);
-    CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_error ON adaptive_evidence(error_id);
-    CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_feature ON adaptive_evidence(feature);
-    CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_topic ON adaptive_evidence(topic_id);
-    CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_created ON adaptive_evidence(created_at);
-  `);
-
-  // Ensure attachments column exists for existing databases
-  try {
-    db.exec('ALTER TABLE chat_messages ADD COLUMN attachments TEXT;');
-  } catch (_e) {
-    // Column already exists
+if (isPostgres) {
+  pgPool = new Pool({
+    connectionString: databaseUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+  });
+} else {
+  const dataDir = path.resolve(process.cwd(), 'data');
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
-
-  // Ensure learning_context column exists for existing conversations
-  try {
-    db.exec('ALTER TABLE chat_conversations ADD COLUMN learning_context TEXT;');
-  } catch (_e) {
-    // Column already exists
-  }
-
-  // Authoritative active learning context state store
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS active_learning_context (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      source TEXT NOT NULL,
-      topic_id TEXT,
-      topic_name TEXT NOT NULL,
-      subject_id TEXT,
-      conversation_id TEXT,
-      conversation_title TEXT,
-      summary TEXT,
-      detected_gaps TEXT,
-      key_concepts TEXT,
-      unresolved_questions TEXT,
-      has_attachments INTEGER DEFAULT 0,
-      attachment_names TEXT,
-      updated_at TEXT NOT NULL
-    );
-  `);
-
-  // Safe column migrations for existing SQLite database
-  try { db.prepare("ALTER TABLE questions ADD COLUMN scenario_vignette TEXT").run(); } catch {}
-  try { db.prepare("ALTER TABLE questions ADD COLUMN clinical_vignette TEXT").run(); } catch {}
-  try { db.prepare("ALTER TABLE simulations ADD COLUMN system_presentation TEXT").run(); } catch {}
-  try { db.prepare("ALTER TABLE simulations ADD COLUMN patient_presentation TEXT").run(); } catch {}
-
-  seedInitialData();
+  const dbPath = path.join(dataDir, 'mechanism.db');
+  sqliteDb = new DatabaseSync(dbPath);
 }
 
-export const DEFAULT_USER_ID = 'user_physics_scholar';
+export function toPgSql(sql: string): string {
+  let paramIndex = 1;
+  let inQuote = false;
+  let quoteChar = '';
+  let out = '';
 
-function seedInitialData() {
-  // Ensure default user and non-destructively migrate any legacy user_mbbs_scholar records
-  const legacyUserCheck = db.prepare('SELECT id FROM users WHERE id = ?').get('user_mbbs_scholar');
-  if (legacyUserCheck) {
-    try {
-      db.prepare(`INSERT OR IGNORE INTO users (id, name, created_at, updated_at) VALUES (?, 'BSc Physics Scholar', ?, ?)`).run(DEFAULT_USER_ID, new Date().toISOString(), new Date().toISOString());
-      db.prepare(`UPDATE OR IGNORE learning_sessions SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE mechanisms SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE errors SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE question_attempts SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE user_model SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE active_learning_context SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE chat_conversations SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE adaptive_evidence SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE simulation_attempts SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`UPDATE OR IGNORE reconstructions SET user_id = ? WHERE user_id = 'user_mbbs_scholar'`).run(DEFAULT_USER_ID);
-      db.prepare(`DELETE FROM users WHERE id = 'user_mbbs_scholar'`).run();
-    } catch (migErr) {
-      console.warn('Non-destructive user migration notice:', migErr);
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i];
+    if (!inQuote && (char === "'" || char === '"')) {
+      inQuote = true;
+      quoteChar = char;
+      out += char;
+    } else if (inQuote && char === quoteChar) {
+      if (sql[i + 1] === quoteChar) {
+        out += char + sql[i + 1];
+        i++;
+      } else {
+        inQuote = false;
+        out += char;
+      }
+    } else if (!inQuote && char === '?') {
+      out += `$${paramIndex++}`;
+    } else {
+      out += char;
     }
   }
 
-  const userCheck = db.prepare('SELECT id FROM users WHERE id = ?').get(DEFAULT_USER_ID);
-  const now = new Date().toISOString();
-
-  if (!userCheck) {
-    db.prepare(`
-      INSERT INTO users (id, name, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(DEFAULT_USER_ID, 'BSc Physics Scholar', now, now);
-  } else {
-    db.prepare(`UPDATE users SET name = 'BSc Physics Scholar' WHERE id = ?`).run(DEFAULT_USER_ID);
+  if (out.includes('sqlite_master')) {
+    out = out.replace(
+      /FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'/gi,
+      "FROM information_schema.tables WHERE table_schema = 'public'"
+    );
   }
 
-  // Clean up legacy medical subjects/topics/conversations/evidence if present
-  try {
-    db.prepare("DELETE FROM questions WHERE id LIKE 'q_%' OR topic_id LIKE 'top_sa%' OR topic_id LIKE 'top_edema%' OR topic_id LIKE 'top_preload%' OR topic_id LIKE 'top_hypovent%' OR topic_id LIKE 'top_eca%' OR topic_id LIKE 'top_raas%'").run();
-    db.prepare("DELETE FROM mechanisms WHERE topic_id LIKE 'top_sa%' OR topic_id LIKE 'top_edema%'").run();
-    db.prepare("DELETE FROM simulations WHERE topic_id LIKE 'top_edema%' OR id LIKE 'sim_edema%'").run();
-    db.prepare("DELETE FROM topics WHERE subject_id IN ('sub_physio', 'sub_patho', 'sub_pharma', 'sub_anat', 'sub_biochem', 'sub_med')").run();
-    db.prepare("DELETE FROM subjects WHERE id IN ('sub_physio', 'sub_patho', 'sub_pharma', 'sub_anat', 'sub_biochem', 'sub_med')").run();
+  // Handle INSERT OR IGNORE INTO -> INSERT INTO ... ON CONFLICT DO NOTHING
+  if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(out)) {
+    out = out.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
+    if (!/ON\s+CONFLICT/i.test(out)) {
+      out += ' ON CONFLICT DO NOTHING';
+    }
+  }
 
-    // Clean any legacy medical chat conversations & messages
-    db.prepare(`
-      DELETE FROM chat_messages 
-      WHERE conversation_id IN (
-        SELECT id FROM chat_conversations 
-        WHERE title LIKE '%SA node%' OR title LIKE '%hyperkalemia%' OR title LIKE '%edema%' OR title LIKE '%pittin%' OR topic_id LIKE 'top_sa%' OR topic_id LIKE 'top_edema%'
-      )
-    `).run();
-    db.prepare(`
-      DELETE FROM chat_conversations 
-      WHERE title LIKE '%SA node%' OR title LIKE '%hyperkalemia%' OR title LIKE '%edema%' OR title LIKE '%pittin%' OR topic_id LIKE 'top_sa%' OR topic_id LIKE 'top_edema%'
-    `).run();
-    db.prepare(`DELETE FROM chat_messages WHERE conversation_id NOT IN (SELECT id FROM chat_conversations)`).run();
+  // Handle UPDATE OR IGNORE -> UPDATE
+  out = out.replace(/UPDATE\s+OR\s+IGNORE/gi, 'UPDATE');
 
-    // Clean any legacy medical adaptive evidence records
-    db.prepare(`
-      DELETE FROM adaptive_evidence 
-      WHERE evidence_summary LIKE '%Edema%' OR evidence_summary LIKE '%Starling%' OR evidence_summary LIKE '%SA node%' OR evidence_summary LIKE '%hyperkalemia%'
-    `).run();
+  return out;
+}
 
-    // Normalize user_model id
-    db.prepare("UPDATE user_model SET id = 'model_' || user_id WHERE id = 'model_user_mbbs_scholar'").run();
-  } catch (cleanErr) {
-    console.warn('Database legacy cleanup notice:', cleanErr);
+function normalizeParams(args: any[]): any[] {
+  if (args.length === 1 && Array.isArray(args[0])) {
+    return args[0];
+  }
+  return args;
+}
+
+export const db = {
+  isPostgres,
+
+  async get<T = any>(sql: string, ...params: any[]): Promise<T | null> {
+    const flatParams = normalizeParams(params);
+    if (isPostgres && pgPool) {
+      const pgSql = toPgSql(sql);
+      const res = await pgPool.query(pgSql, flatParams);
+      return (res.rows[0] as T) || null;
+    } else if (sqliteDb) {
+      const stmt = sqliteDb.prepare(sql);
+      const row = stmt.get(...flatParams);
+      return (row as T) || null;
+    }
+    return null;
+  },
+
+  async all<T = any>(sql: string, ...params: any[]): Promise<T[]> {
+    const flatParams = normalizeParams(params);
+    if (isPostgres && pgPool) {
+      const pgSql = toPgSql(sql);
+      const res = await pgPool.query(pgSql, flatParams);
+      return (res.rows as T[]) || [];
+    } else if (sqliteDb) {
+      const stmt = sqliteDb.prepare(sql);
+      const rows = stmt.all(...flatParams);
+      return (rows as T[]) || [];
+    }
+    return [];
+  },
+
+  async query<T = any>(sql: string, ...params: any[]): Promise<T[]> {
+    return this.all(sql, ...params);
+  },
+
+  async run(sql: string, ...params: any[]): Promise<{ changes: number }> {
+    const flatParams = normalizeParams(params);
+    if (isPostgres && pgPool) {
+      const pgSql = toPgSql(sql);
+      const res = await pgPool.query(pgSql, flatParams);
+      return { changes: res.rowCount || 0 };
+    } else if (sqliteDb) {
+      const stmt = sqliteDb.prepare(sql);
+      const res = stmt.run(...flatParams);
+      return { changes: Number(res.changes) || 0 };
+    }
+    return { changes: 0 };
+  },
+
+  async exec(sql: string): Promise<void> {
+    if (isPostgres && pgPool) {
+      await pgPool.query(sql);
+    } else if (sqliteDb) {
+      sqliteDb.exec(sql);
+    }
+  },
+
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (isPostgres && pgPool) {
+      const client = await pgPool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await fn();
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } else if (sqliteDb) {
+      sqliteDb.exec('BEGIN TRANSACTION;');
+      try {
+        const result = await fn();
+        sqliteDb.exec('COMMIT;');
+        return result;
+      } catch (err) {
+        sqliteDb.exec('ROLLBACK;');
+        throw err;
+      }
+    }
+    return await fn();
+  },
+
+  prepare(sql: string) {
+    if (sqliteDb) {
+      return sqliteDb.prepare(sql);
+    }
+    throw new Error('db.prepare is only available in synchronous SQLite local mode. Use await db.get / all / run.');
+  }
+};
+
+export const DEFAULT_USER_ID = 'user_physics_scholar';
+
+// Initialize schema and tables
+export async function initDatabase(): Promise<void> {
+  if (isPostgres) {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS subjects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        code TEXT NOT NULL UNIQUE,
+        icon TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS topics (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        chapter TEXT,
+        description TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS learning_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+        mode TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanisms (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        user_explanation TEXT,
+        canonical_mechanism TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanism_evaluations (
+        id TEXT PRIMARY KEY,
+        mechanism_id TEXT REFERENCES mechanisms(id) ON DELETE CASCADE,
+        session_id TEXT REFERENCES learning_sessions(id) ON DELETE SET NULL,
+        causal_accuracy REAL NOT NULL,
+        completeness REAL NOT NULL,
+        directionality REAL NOT NULL,
+        assumption_quality REAL NOT NULL,
+        discriminator_quality REAL NOT NULL,
+        exception_handling REAL NOT NULL,
+        compression_quality REAL NOT NULL,
+        alternative_mechanism_quality REAL NOT NULL,
+        confidence REAL NOT NULL,
+        overall_score REAL NOT NULL,
+        evaluator_feedback TEXT NOT NULL,
+        weakest_link TEXT,
+        what_is_correct TEXT,
+        attack_details TEXT,
+        distinguishing_observation TEXT,
+        repaired_model TEXT,
+        compressed_mechanism TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS errors (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        frequency INTEGER NOT NULL DEFAULT 1,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanism_errors (
+        id TEXT PRIMARY KEY,
+        evaluation_id TEXT NOT NULL REFERENCES mechanism_evaluations(id) ON DELETE CASCADE,
+        error_id TEXT NOT NULL REFERENCES errors(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS questions (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL,
+        question_text TEXT NOT NULL,
+        options TEXT NOT NULL,
+        correct_answer TEXT NOT NULL,
+        explanation TEXT NOT NULL,
+        reasoning_target TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        clinical_vignette TEXT,
+        scenario_vignette TEXT,
+        discriminator_note TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS question_attempts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+        answer TEXT NOT NULL,
+        correct INTEGER NOT NULL,
+        confidence INTEGER NOT NULL,
+        reasoning TEXT,
+        reasoning_error TEXT,
+        time_taken INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS simulations (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        scenario TEXT NOT NULL,
+        hidden_state TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        patient_presentation TEXT,
+        system_presentation TEXT,
+        available_investigations TEXT,
+        available_decisions TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS simulation_attempts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        simulation_id TEXT NOT NULL REFERENCES simulations(id) ON DELETE CASCADE,
+        hypotheses TEXT NOT NULL,
+        evidence_used TEXT NOT NULL,
+        decisions TEXT NOT NULL,
+        confidence INTEGER NOT NULL,
+        outcome TEXT NOT NULL,
+        model_update TEXT,
+        unnecessary_investigations_count INTEGER DEFAULT 0,
+        overanalyzed INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS reconstructions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        source_mechanism TEXT NOT NULL,
+        user_reconstruction TEXT NOT NULL,
+        evaluation TEXT NOT NULL,
+        score REAL NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS user_model (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        reasoning_profile TEXT NOT NULL,
+        topic_mastery TEXT NOT NULL,
+        error_profile TEXT NOT NULL,
+        confidence_calibration TEXT NOT NULL,
+        cognitive_resource_allocation TEXT NOT NULL,
+        recommended_difficulty TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_conversations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        learning_context TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        classification TEXT,
+        metadata TEXT,
+        attachments TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS adaptive_evidence (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        feature TEXT NOT NULL,
+        topic_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+        error_id TEXT REFERENCES errors(id) ON DELETE SET NULL,
+        correct_answer INTEGER,
+        correct_reasoning INTEGER,
+        robust_mechanism INTEGER,
+        transferable_mastery INTEGER,
+        confidence INTEGER,
+        time_taken_sec REAL,
+        discriminator_identified INTEGER,
+        reconstruction_score REAL,
+        evidence_strength REAL NOT NULL,
+        evidence_summary TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS active_learning_context (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        topic_id TEXT,
+        topic_name TEXT NOT NULL,
+        subject_id TEXT,
+        conversation_id TEXT,
+        conversation_title TEXT,
+        summary TEXT,
+        detected_gaps TEXT,
+        key_concepts TEXT,
+        unresolved_questions TEXT,
+        has_attachments INTEGER DEFAULT 0,
+        attachment_names TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS private_auth (
+        id TEXT PRIMARY KEY DEFAULT 'current_private_auth',
+        initialized BOOLEAN NOT NULL DEFAULT TRUE,
+        username TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        recovery_clue TEXT,
+        updated_at BIGINT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS private_sessions (
+        token TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL,
+        remember_me BOOLEAN NOT NULL DEFAULT FALSE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_user ON adaptive_evidence(user_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_error ON adaptive_evidence(error_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_feature ON adaptive_evidence(feature);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_topic ON adaptive_evidence(topic_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_created ON adaptive_evidence(created_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_question_attempts_user ON question_attempts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_private_sessions_token ON private_sessions(token);
+      CREATE INDEX IF NOT EXISTS idx_private_sessions_expires ON private_sessions(expires_at);
+    `);
+  } else if (sqliteDb) {
+    sqliteDb.exec('PRAGMA foreign_keys = ON;');
+
+    sqliteDb.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS subjects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        code TEXT NOT NULL UNIQUE,
+        icon TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS topics (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        chapter TEXT,
+        description TEXT,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS learning_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        topic_id TEXT,
+        mode TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanisms (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        topic_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        user_explanation TEXT,
+        canonical_mechanism TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanism_evaluations (
+        id TEXT PRIMARY KEY,
+        mechanism_id TEXT,
+        session_id TEXT,
+        causal_accuracy REAL NOT NULL,
+        completeness REAL NOT NULL,
+        directionality REAL NOT NULL,
+        assumption_quality REAL NOT NULL,
+        discriminator_quality REAL NOT NULL,
+        exception_handling REAL NOT NULL,
+        compression_quality REAL NOT NULL,
+        alternative_mechanism_quality REAL NOT NULL,
+        confidence REAL NOT NULL,
+        overall_score REAL NOT NULL,
+        evaluator_feedback TEXT NOT NULL,
+        weakest_link TEXT,
+        what_is_correct TEXT,
+        attack_details TEXT,
+        distinguishing_observation TEXT,
+        repaired_model TEXT,
+        compressed_mechanism TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(mechanism_id) REFERENCES mechanisms(id) ON DELETE CASCADE,
+        FOREIGN KEY(session_id) REFERENCES learning_sessions(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS errors (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        frequency INTEGER NOT NULL DEFAULT 1,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS mechanism_errors (
+        id TEXT PRIMARY KEY,
+        evaluation_id TEXT NOT NULL,
+        error_id TEXT NOT NULL,
+        FOREIGN KEY(evaluation_id) REFERENCES mechanism_evaluations(id) ON DELETE CASCADE,
+        FOREIGN KEY(error_id) REFERENCES errors(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS questions (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        question_text TEXT NOT NULL,
+        options TEXT NOT NULL,
+        correct_answer TEXT NOT NULL,
+        explanation TEXT NOT NULL,
+        reasoning_target TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        clinical_vignette TEXT,
+        scenario_vignette TEXT,
+        discriminator_note TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS question_attempts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        question_id TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        correct INTEGER NOT NULL,
+        confidence INTEGER NOT NULL,
+        reasoning TEXT,
+        reasoning_error TEXT,
+        time_taken INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS simulations (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        scenario TEXT NOT NULL,
+        hidden_state TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        patient_presentation TEXT,
+        system_presentation TEXT,
+        available_investigations TEXT,
+        available_decisions TEXT,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS simulation_attempts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        simulation_id TEXT NOT NULL,
+        hypotheses TEXT NOT NULL,
+        evidence_used TEXT NOT NULL,
+        decisions TEXT NOT NULL,
+        confidence INTEGER NOT NULL,
+        outcome TEXT NOT NULL,
+        model_update TEXT,
+        unnecessary_investigations_count INTEGER DEFAULT 0,
+        overanalyzed INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(simulation_id) REFERENCES simulations(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS reconstructions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        topic_id TEXT NOT NULL,
+        source_mechanism TEXT NOT NULL,
+        user_reconstruction TEXT NOT NULL,
+        evaluation TEXT NOT NULL,
+        score REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS user_model (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE,
+        reasoning_profile TEXT NOT NULL,
+        topic_mastery TEXT NOT NULL,
+        error_profile TEXT NOT NULL,
+        confidence_calibration TEXT NOT NULL,
+        cognitive_resource_allocation TEXT NOT NULL,
+        recommended_difficulty TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_conversations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        topic_id TEXT,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        classification TEXT,
+        metadata TEXT,
+        attachments TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS adaptive_evidence (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        feature TEXT NOT NULL,
+        topic_id TEXT,
+        error_id TEXT,
+        correct_answer INTEGER,
+        correct_reasoning INTEGER,
+        robust_mechanism INTEGER,
+        transferable_mastery INTEGER,
+        confidence INTEGER,
+        time_taken_sec REAL,
+        discriminator_identified INTEGER,
+        reconstruction_score REAL,
+        evidence_strength REAL NOT NULL,
+        evidence_summary TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL,
+        FOREIGN KEY(error_id) REFERENCES errors(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_user ON adaptive_evidence(user_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_error ON adaptive_evidence(error_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_feature ON adaptive_evidence(feature);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_topic ON adaptive_evidence(topic_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_created ON adaptive_evidence(created_at);
+
+      CREATE TABLE IF NOT EXISTS active_learning_context (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        topic_id TEXT,
+        topic_name TEXT NOT NULL,
+        subject_id TEXT,
+        conversation_id TEXT,
+        conversation_title TEXT,
+        summary TEXT,
+        detected_gaps TEXT,
+        key_concepts TEXT,
+        unresolved_questions TEXT,
+        has_attachments INTEGER DEFAULT 0,
+        attachment_names TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS private_auth (
+        id TEXT PRIMARY KEY DEFAULT 'current_private_auth',
+        initialized INTEGER NOT NULL DEFAULT 1,
+        username TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        recovery_clue TEXT,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS private_sessions (
+        token TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        remember_me INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+
+    try { sqliteDb.exec('ALTER TABLE chat_messages ADD COLUMN attachments TEXT;'); } catch {}
+    try { sqliteDb.exec('ALTER TABLE chat_conversations ADD COLUMN learning_context TEXT;'); } catch {}
+    try { sqliteDb.prepare("ALTER TABLE questions ADD COLUMN scenario_vignette TEXT").run(); } catch {}
+    try { sqliteDb.prepare("ALTER TABLE questions ADD COLUMN clinical_vignette TEXT").run(); } catch {}
+    try { sqliteDb.prepare("ALTER TABLE simulations ADD COLUMN system_presentation TEXT").run(); } catch {}
+    try { sqliteDb.prepare("ALTER TABLE simulations ADD COLUMN patient_presentation TEXT").run(); } catch {}
+  }
+
+  await seedInitialData();
+}
+
+async function seedInitialData(): Promise<void> {
+  const now = new Date().toISOString();
+
+  // Ensure default user exists
+  const userCheck = await db.get('SELECT id FROM users WHERE id = ?', DEFAULT_USER_ID);
+  if (!userCheck) {
+    await db.run(
+      'INSERT INTO users (id, name, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
+      DEFAULT_USER_ID,
+      'BSc Physics Scholar',
+      now,
+      now
+    );
   }
 
   // Seed default reasoning errors if empty
-  const countErrors = db.prepare('SELECT count(*) as count FROM errors').get() as { count: number };
-  if (countErrors.count === 0) {
-    const insertError = db.prepare(`
-      INSERT INTO errors (id, user_id, category, description, severity, frequency, first_seen, last_seen)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+  const countErrors = await db.get<{ count: string | number }>('SELECT count(*) as count FROM errors');
+  if (Number(countErrors?.count || 0) === 0) {
     const defaultErrors = [
       { id: 'err_assoc_causation', category: 'Causal Reasoning', description: 'Association → Causation Confounding', severity: 'high' },
       { id: 'err_directionality_inversion', category: 'Mechanism Reasoning', description: 'Directionality Inversion in Dynamic Flux Chains', severity: 'high' },
@@ -381,26 +758,27 @@ function seedInitialData() {
       { id: 'err_missing_variable', category: 'Variable Accounting', description: 'Missing Compensatory Feedback or State Variable', severity: 'high' },
     ];
     for (const e of defaultErrors) {
-      insertError.run(e.id, DEFAULT_USER_ID, e.category, e.description, e.severity, 0, now, now);
+      await db.run(
+        'INSERT INTO errors (id, user_id, category, description, severity, frequency, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
+        e.id, DEFAULT_USER_ID, e.category, e.description, e.severity, 0, now, now
+      );
     }
   }
 
   // Seed subjects if empty
-  const countSubjects = db.prepare('SELECT count(*) as count FROM subjects').get() as { count: number };
-  if (countSubjects.count === 0) {
-    const insertSubject = db.prepare('INSERT INTO subjects (id, name, code, icon) VALUES (?, ?, ?, ?)');
-    insertSubject.run('sub_physics', 'Classical Mechanics & Dynamics', 'MECH', 'Activity');
-    insertSubject.run('sub_em', 'Electrodynamics & Field Theory', 'EM', 'Zap');
-    insertSubject.run('sub_thermo', 'Thermal & Statistical Physics', 'THERMO', 'Flame');
-    insertSubject.run('sub_quantum', 'Quantum Mechanics & Modern Physics', 'QUANT', 'Target');
+  const countSubjects = await db.get<{ count: string | number }>('SELECT count(*) as count FROM subjects');
+  if (Number(countSubjects?.count || 0) === 0) {
+    await db.run('INSERT INTO subjects (id, name, code, icon) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING', 'sub_physics', 'Classical Mechanics & Dynamics', 'MECH', 'Activity');
+    await db.run('INSERT INTO subjects (id, name, code, icon) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING', 'sub_em', 'Electrodynamics & Field Theory', 'EM', 'Zap');
+    await db.run('INSERT INTO subjects (id, name, code, icon) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING', 'sub_thermo', 'Thermal & Statistical Physics', 'THERMO', 'Flame');
+    await db.run('INSERT INTO subjects (id, name, code, icon) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING', 'sub_quantum', 'Quantum Mechanics & Modern Physics', 'QUANT', 'Target');
   }
 
   // Seed topics if empty
-  const countTopics = db.prepare('SELECT count(*) as count FROM topics').get() as { count: number };
-  if (countTopics.count === 0) {
-    const insertTopic = db.prepare('INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?)');
-
-    insertTopic.run(
+  const countTopics = await db.get<{ count: string | number }>('SELECT count(*) as count FROM topics');
+  if (Number(countTopics?.count || 0) === 0) {
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_damped_oscillator',
       'sub_physics',
       'Damped & Driven Harmonic Oscillators',
@@ -408,7 +786,8 @@ function seedInitialData() {
       'Differential equations of damped motion, underdamped vs critically damped response, quality factor Q, and resonance phase lag.'
     );
 
-    insertTopic.run(
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_gyroscopic_precession',
       'sub_physics',
       'Angular Momentum & Gyroscopic Precession',
@@ -416,7 +795,8 @@ function seedInitialData() {
       'Torque coupling to angular momentum vectors (dL/dt = τ), precession frequency Ω_p = τ/L, and nutation transients.'
     );
 
-    insertTopic.run(
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_lenz_induction',
       'sub_em',
       'Lenz\'s Law & Electromagnetic Induction',
@@ -424,7 +804,8 @@ function seedInitialData() {
       'Faraday law of induction (EMF = -dΦ/dt), eddy current magnetic braking force, and Lenz sign directionality.'
     );
 
-    insertTopic.run(
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_carnot_entropy',
       'sub_thermo',
       'Carnot Cycles, Entropy & Second Law',
@@ -432,7 +813,8 @@ function seedInitialData() {
       'Reversible heat engine efficiency η = 1 - T_C/T_H, Clausius inequality ∮ dQ/T ≤ 0, and non-decreasing entropy in isolated systems.'
     );
 
-    insertTopic.run(
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_maxwell_boundary',
       'sub_em',
       'Maxwell Equations & Electromagnetic Wave Propagation',
@@ -440,7 +822,8 @@ function seedInitialData() {
       'Displacement current, transverse wave equation derivation, Poynting vector S = (1/μ_0) E × B, and dielectric interface boundary conditions.'
     );
 
-    insertTopic.run(
+    await db.run(
+      'INSERT INTO topics (id, subject_id, name, chapter, description) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
       'top_schrodinger_tunnel',
       'sub_quantum',
       'Quantum Tunneling & Potential Barriers',
@@ -449,7 +832,7 @@ function seedInitialData() {
     );
   }
 
-  // Seed User Model if not exists or if reset needed
+  // Seed User Model if not exists
   const initialReasoningProfile = JSON.stringify({
     first_principles_index: null,
     causal_precision: null,
@@ -475,14 +858,13 @@ function seedInitialData() {
     decision_commit_efficiency: 'Pending Assessment',
   });
 
-  const userModelCheck = db.prepare('SELECT id FROM user_model WHERE user_id = ?').get(DEFAULT_USER_ID);
+  const userModelCheck = await db.get('SELECT id FROM user_model WHERE user_id = ?', DEFAULT_USER_ID);
   if (!userModelCheck) {
-    db.prepare(`
-      INSERT INTO user_model (
+    await db.run(
+      `INSERT INTO user_model (
         id, user_id, reasoning_profile, topic_mastery, error_profile,
         confidence_calibration, cognitive_resource_allocation, recommended_difficulty, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'model_' + DEFAULT_USER_ID,
       DEFAULT_USER_ID,
       initialReasoningProfile,
@@ -493,34 +875,10 @@ function seedInitialData() {
       'Mechanistic',
       now
     );
-  } else {
-    // If student has 0 recorded question attempts and 0 mechanism evaluations, ensure clean unassessed state
-    const attemptsCount = (db.prepare('SELECT count(*) as count FROM question_attempts WHERE user_id = ?').get(DEFAULT_USER_ID) as any)?.count || 0;
-    const evalCount = (db.prepare('SELECT count(*) as count FROM mechanism_evaluations').get() as any)?.count || 0;
-    if (attemptsCount === 0 && evalCount === 0) {
-      db.prepare(`
-        UPDATE user_model SET
-          reasoning_profile = ?,
-          topic_mastery = ?,
-          error_profile = ?,
-          confidence_calibration = ?,
-          cognitive_resource_allocation = ?,
-          updated_at = ?
-        WHERE user_id = ?
-      `).run(
-        initialReasoningProfile,
-        initialTopicMastery,
-        initialErrorProfile,
-        initialCalibration,
-        initialCognitiveResource,
-        now,
-        DEFAULT_USER_ID
-      );
-    }
   }
 
   // Seed sample physical simulation
-  const countSims = db.prepare('SELECT count(*) as count FROM simulations').get() as { count: number };
+  const countSims = await db.get<{ count: string | number }>('SELECT count(*) as count FROM simulations');
   const oscillatorSystemPresentation = JSON.stringify({
     apparatus_spec: 'Resonant Oscillator Rig (0.50 kg / 200 N/m)',
     primary_anomaly: 'Resonance amplitude spike + 85° phase lag under sinusoidal drive',
@@ -528,15 +886,12 @@ function seedInitialData() {
     diagnostics: { 'Spring Constant (k)': '200 N/m', 'Oscillator Mass (m)': '0.50 kg', 'Nominal Drag (b_est)': '0.20 N·s/m' }
   });
 
-  if (countSims.count === 0) {
-    const insertSim = db.prepare(`
-      INSERT INTO simulations (
+  if (Number(countSims?.count || 0) === 0) {
+    await db.run(
+      `INSERT INTO simulations (
         id, topic_id, title, scenario, hidden_state, difficulty,
         system_presentation, patient_presentation, available_investigations, available_decisions
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertSim.run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'sim_damped_oscillator',
       'top_damped_oscillator',
       'Underdamped Resonant System: Drag vs Restoring Force Dilemma',
@@ -610,26 +965,14 @@ function seedInitialData() {
     );
   }
 
-  // Ensure system_presentation is backfilled on existing simulations if empty
-  try {
-    db.prepare(`
-      UPDATE simulations
-      SET system_presentation = ?
-      WHERE system_presentation IS NULL OR system_presentation = '' OR system_presentation = '{}'
-    `).run(oscillatorSystemPresentation);
-  } catch {}
-
   // Seed sample reasoning-first MCQs
-  const countQuestions = db.prepare('SELECT count(*) as count FROM questions').get() as { count: number };
-  if (countQuestions.count === 0) {
-    const insertQ = db.prepare(`
-      INSERT INTO questions (
+  const countQuestions = await db.get<{ count: string | number }>('SELECT count(*) as count FROM questions');
+  if (Number(countQuestions?.count || 0) === 0) {
+    await db.run(
+      `INSERT INTO questions (
         id, topic_id, mode, question_text, options, correct_answer,
         explanation, reasoning_target, difficulty, scenario_vignette, discriminator_note, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertQ.run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'q_damped_osc_1',
       'top_damped_oscillator',
       'first_principles',
@@ -649,7 +992,11 @@ function seedInitialData() {
       now
     );
 
-    insertQ.run(
+    await db.run(
+      `INSERT INTO questions (
+        id, topic_id, mode, question_text, options, correct_answer,
+        explanation, reasoning_target, difficulty, scenario_vignette, discriminator_note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'q_lenz_induction_1',
       'top_lenz_induction',
       'second_order',
@@ -669,7 +1016,11 @@ function seedInitialData() {
       now
     );
 
-    insertQ.run(
+    await db.run(
+      `INSERT INTO questions (
+        id, topic_id, mode, question_text, options, correct_answer,
+        explanation, reasoning_target, difficulty, scenario_vignette, discriminator_note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'q_carnot_entropy_1',
       'top_carnot_entropy',
       'causal_discrimination',
@@ -689,7 +1040,11 @@ function seedInitialData() {
       now
     );
 
-    insertQ.run(
+    await db.run(
+      `INSERT INTO questions (
+        id, topic_id, mode, question_text, options, correct_answer,
+        explanation, reasoning_target, difficulty, scenario_vignette, discriminator_note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'q_maxwell_boundary_1',
       'top_maxwell_boundary',
       'first_principles',
@@ -711,14 +1066,11 @@ function seedInitialData() {
   }
 
   // Seed sample pre-configured canonical mechanisms
-  const countMech = db.prepare('SELECT count(*) as count FROM mechanisms').get() as { count: number };
-  if (countMech.count === 0) {
-    const insertMech = db.prepare(`
-      INSERT INTO mechanisms (id, user_id, topic_id, title, user_explanation, canonical_mechanism, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertMech.run(
+  const countMech = await db.get<{ count: string | number }>('SELECT count(*) as count FROM mechanisms');
+  if (Number(countMech?.count || 0) === 0) {
+    await db.run(
+      `INSERT INTO mechanisms (id, user_id, topic_id, title, user_explanation, canonical_mechanism, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
       'mech_damped_oscillator',
       DEFAULT_USER_ID,
       'top_damped_oscillator',

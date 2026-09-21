@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Request, Response } from 'express';
-import { db, DEFAULT_USER_ID } from './db.ts';
+import { db, DEFAULT_USER_ID, isPostgres } from './db.ts';
 
 export interface PrivateSession {
   token: string;
@@ -23,8 +23,9 @@ export interface StoredAuthCredentials {
   updatedAt: number;
 }
 
-// In-memory active session store for private application
+// In-memory active session cache
 const SESSIONS = new Map<string, PrivateSession>();
+let cachedCredentials: StoredAuthCredentials | null = null;
 
 const dataDir = path.resolve(process.cwd(), 'data');
 const credentialsFile = path.join(dataDir, 'private_auth.json');
@@ -34,17 +35,47 @@ function hashPassword(password: string, salt: string): string {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-// Load credentials if initialized, otherwise returns null
-export function getStoredCredentials(): StoredAuthCredentials | null {
+// Load credentials from PostgreSQL / SQLite or migration fallback
+export async function getStoredCredentials(): Promise<StoredAuthCredentials | null> {
+  if (cachedCredentials && cachedCredentials.initialized) {
+    return cachedCredentials;
+  }
+
   try {
-    if (!fs.existsSync(credentialsFile)) {
-      return null;
+    const row = await db.get<{
+      id: string;
+      initialized: boolean | number;
+      username: string;
+      display_name: string;
+      salt: string;
+      hash: string;
+      recovery_clue: string | null;
+      updated_at: number | string;
+    }>('SELECT * FROM private_auth WHERE id = ?', 'current_private_auth');
+
+    if (row && (row.initialized === true || row.initialized === 1) && row.username && row.salt && row.hash) {
+      cachedCredentials = {
+        initialized: true,
+        username: row.username,
+        displayName: row.display_name || row.username,
+        salt: row.salt,
+        hash: row.hash,
+        recoveryClue: row.recovery_clue || undefined,
+        updatedAt: Number(row.updated_at) || Date.now(),
+      };
+      return cachedCredentials;
     }
 
-    const raw = fs.readFileSync(credentialsFile, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.initialized === true && parsed.username && parsed.salt && parsed.hash) {
-      return parsed as StoredAuthCredentials;
+    // Local filesystem migration fallback if not Postgres
+    if (!isPostgres && fs.existsSync(credentialsFile)) {
+      const raw = fs.readFileSync(credentialsFile, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.initialized === true && parsed.username && parsed.salt && parsed.hash) {
+        cachedCredentials = parsed as StoredAuthCredentials;
+        // Sync into db table
+        await saveCredentials(cachedCredentials);
+        return cachedCredentials;
+      }
     }
   } catch (err) {
     console.error('Error reading stored credentials:', err);
@@ -53,9 +84,144 @@ export function getStoredCredentials(): StoredAuthCredentials | null {
   return null;
 }
 
+// Persist credentials to PostgreSQL / SQLite
+export async function saveCredentials(creds: StoredAuthCredentials): Promise<void> {
+  cachedCredentials = creds;
+
+  await db.run(
+    `INSERT INTO private_auth (id, initialized, username, display_name, salt, hash, recovery_clue, updated_at)
+     VALUES ('current_private_auth', ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       initialized = ?,
+       username = ?,
+       display_name = ?,
+       salt = ?,
+       hash = ?,
+       recovery_clue = ?,
+       updated_at = ?`,
+    creds.initialized,
+    creds.username,
+    creds.displayName,
+    creds.salt,
+    creds.hash,
+    creds.recoveryClue || null,
+    creds.updatedAt,
+    creds.initialized,
+    creds.username,
+    creds.displayName,
+    creds.salt,
+    creds.hash,
+    creds.recoveryClue || null,
+    creds.updatedAt
+  );
+
+  // Sync to local filesystem if not Postgres
+  if (!isPostgres) {
+    try {
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      fs.writeFileSync(credentialsFile, JSON.stringify(creds, null, 2), 'utf-8');
+    } catch {}
+  }
+}
+
+// Session lookup with multi-tier in-memory cache and persistent database
+export async function getSessionByToken(token: string): Promise<PrivateSession | null> {
+  if (!token) return null;
+
+  // 1. Check in-memory cache
+  const cached = SESSIONS.get(token);
+  if (cached) {
+    if (Date.now() > cached.expiresAt) {
+      SESSIONS.delete(token);
+      await db.run('DELETE FROM private_sessions WHERE token = ?', token);
+      return null;
+    }
+    return cached;
+  }
+
+  // 2. Query persistent PostgreSQL / SQLite store
+  try {
+    const row = await db.get<{
+      token: string;
+      username: string;
+      display_name: string;
+      created_at: number | string;
+      expires_at: number | string;
+      remember_me: boolean | number;
+    }>('SELECT * FROM private_sessions WHERE token = ?', token);
+
+    if (row) {
+      const expiresAt = Number(row.expires_at);
+      if (Date.now() > expiresAt) {
+        await db.run('DELETE FROM private_sessions WHERE token = ?', token);
+        return null;
+      }
+
+      const session: PrivateSession = {
+        token: row.token,
+        username: row.username,
+        displayName: row.display_name,
+        createdAt: Number(row.created_at),
+        expiresAt,
+        rememberMe: Boolean(row.remember_me),
+      };
+
+      SESSIONS.set(token, session);
+      return session;
+    }
+  } catch (err) {
+    console.error('Error fetching persistent session:', err);
+  }
+
+  return null;
+}
+
+// Persist a session
+export async function saveSession(session: PrivateSession): Promise<void> {
+  SESSIONS.set(session.token, session);
+  try {
+    await db.run(
+      `INSERT INTO private_sessions (token, username, display_name, created_at, expires_at, remember_me)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (token) DO UPDATE SET
+         username = ?,
+         display_name = ?,
+         created_at = ?,
+         expires_at = ?,
+         remember_me = ?`,
+      session.token,
+      session.username,
+      session.displayName,
+      session.createdAt,
+      session.expiresAt,
+      session.rememberMe,
+      session.username,
+      session.displayName,
+      session.createdAt,
+      session.expiresAt,
+      session.rememberMe
+    );
+  } catch (err) {
+    console.error('Error persisting session to database:', err);
+  }
+}
+
+// Invalidate a session
+export async function deleteSession(token: string): Promise<void> {
+  SESSIONS.delete(token);
+  try {
+    await db.run('DELETE FROM private_sessions WHERE token = ?', token);
+  } catch (err) {
+    console.error('Error deleting session from database:', err);
+  }
+}
+
 // Check if private login has been initialized
-export function isAuthInitialized(): boolean {
-  return getStoredCredentials() !== null;
+export async function isAuthInitialized(): Promise<boolean> {
+  const creds = await getStoredCredentials();
+  return creds !== null && creds.initialized === true;
 }
 
 // Verify entered password against stored credentials
@@ -76,10 +242,9 @@ function verifyEnteredPassword(password: string, creds: StoredAuthCredentials): 
 }
 
 // GET /api/auth/status
-// Check whether system is initialized and if a recovery clue is present
-export function handleGetAuthStatus(req: Request, res: Response) {
+export async function handleGetAuthStatus(req: Request, res: Response) {
   try {
-    const creds = getStoredCredentials();
+    const creds = await getStoredCredentials();
     const initialized = Boolean(creds && creds.initialized);
     const hasRecoveryClue = Boolean(creds?.recoveryClue && creds.recoveryClue.trim().length > 0);
 
@@ -97,10 +262,9 @@ export function handleGetAuthStatus(req: Request, res: Response) {
 }
 
 // POST /api/auth/initialize
-// First-run setup for the new owner
-export function handleInitializeAuth(req: Request, res: Response) {
+export async function handleInitializeAuth(req: Request, res: Response) {
   try {
-    if (isAuthInitialized()) {
+    if (await isAuthInitialized()) {
       return res.status(400).json({
         success: false,
         error: 'Private login has already been initialized on this installation.',
@@ -158,10 +322,18 @@ export function handleInitializeAuth(req: Request, res: Response) {
       updatedAt: now,
     };
 
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    fs.writeFileSync(credentialsFile, JSON.stringify(newCreds, null, 2), 'utf-8');
+    await saveCredentials(newCreds);
+
+    // Ensure learner user row exists for the newly initialized user
+    const isoNow = new Date().toISOString();
+    await db.run(
+      'INSERT INTO users (id, name, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = ?',
+      cleanUser,
+      cleanDisplayName,
+      isoNow,
+      isoNow,
+      cleanDisplayName
+    );
 
     // Create active session token immediately for the new owner
     const token = crypto.randomBytes(32).toString('hex');
@@ -177,7 +349,7 @@ export function handleInitializeAuth(req: Request, res: Response) {
       rememberMe: Boolean(rememberMe),
     };
 
-    SESSIONS.set(token, session);
+    await saveSession(session);
 
     return res.json({
       success: true,
@@ -190,6 +362,7 @@ export function handleInitializeAuth(req: Request, res: Response) {
       expiresAt,
     });
   } catch (err: any) {
+    console.error('Error during handleInitializeAuth:', err);
     return res.status(500).json({
       success: false,
       error: 'Failed to initialize private login credentials.',
@@ -198,9 +371,9 @@ export function handleInitializeAuth(req: Request, res: Response) {
 }
 
 // POST /api/auth/login
-export function handleLogin(req: Request, res: Response) {
+export async function handleLogin(req: Request, res: Response) {
   try {
-    const creds = getStoredCredentials();
+    const creds = await getStoredCredentials();
     if (!creds) {
       return res.status(400).json({
         success: false,
@@ -220,7 +393,6 @@ export function handleLogin(req: Request, res: Response) {
     const trimmedUser = String(username).trim();
     const providedPass = String(password);
 
-    // Exact username match (case-insensitive for convenience or exact case)
     const isUserValid = trimmedUser.toLowerCase() === creds.username.toLowerCase();
     const isPassValid = verifyEnteredPassword(providedPass, creds);
 
@@ -231,7 +403,6 @@ export function handleLogin(req: Request, res: Response) {
       });
     }
 
-    // Create cryptographically secure random session token
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();
     const duration = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
@@ -246,7 +417,7 @@ export function handleLogin(req: Request, res: Response) {
       rememberMe: Boolean(rememberMe),
     };
 
-    SESSIONS.set(token, session);
+    await saveSession(session);
 
     return res.json({
       success: true,
@@ -267,7 +438,7 @@ export function handleLogin(req: Request, res: Response) {
 }
 
 // GET /api/auth/session
-export function handleGetSession(req: Request, res: Response) {
+export async function handleGetSession(req: Request, res: Response) {
   try {
     const token = extractSessionToken(req);
     if (!token) {
@@ -278,22 +449,12 @@ export function handleGetSession(req: Request, res: Response) {
       });
     }
 
-    const session = SESSIONS.get(token);
+    const session = await getSessionByToken(token);
     if (!session) {
       return res.status(401).json({
         success: false,
         authenticated: false,
-        error: 'Session not found',
-      });
-    }
-
-    // Check expiration
-    if (Date.now() > session.expiresAt) {
-      SESSIONS.delete(token);
-      return res.status(401).json({
-        success: false,
-        authenticated: false,
-        error: 'Session expired',
+        error: 'Session not found or expired',
       });
     }
 
@@ -317,9 +478,9 @@ export function handleGetSession(req: Request, res: Response) {
 }
 
 // GET /api/auth/recovery-clue
-export function handleGetRecoveryClue(req: Request, res: Response) {
+export async function handleGetRecoveryClue(req: Request, res: Response) {
   try {
-    const creds = getStoredCredentials();
+    const creds = await getStoredCredentials();
     if (!creds || !creds.recoveryClue || !creds.recoveryClue.trim()) {
       return res.json({
         success: true,
@@ -341,7 +502,7 @@ export function handleGetRecoveryClue(req: Request, res: Response) {
 }
 
 // POST /api/auth/change-password
-export function handleChangePassword(req: Request, res: Response) {
+export async function handleChangePassword(req: Request, res: Response) {
   try {
     const token = extractSessionToken(req);
     if (!token) {
@@ -351,7 +512,7 @@ export function handleChangePassword(req: Request, res: Response) {
       });
     }
 
-    const session = SESSIONS.get(token);
+    const session = await getSessionByToken(token);
     if (!session || Date.now() > session.expiresAt) {
       return res.status(401).json({
         success: false,
@@ -359,7 +520,7 @@ export function handleChangePassword(req: Request, res: Response) {
       });
     }
 
-    const creds = getStoredCredentials();
+    const creds = await getStoredCredentials();
     if (!creds) {
       return res.status(400).json({
         success: false,
@@ -376,7 +537,6 @@ export function handleChangePassword(req: Request, res: Response) {
       });
     }
 
-    // Validate current password
     if (!verifyEnteredPassword(String(currentPassword), creds)) {
       return res.status(400).json({
         success: false,
@@ -401,7 +561,6 @@ export function handleChangePassword(req: Request, res: Response) {
       });
     }
 
-    // Create new salt and hash for new password
     const newSalt = crypto.randomBytes(16).toString('hex');
     const newHash = hashPassword(newPassStr, newSalt);
 
@@ -412,10 +571,7 @@ export function handleChangePassword(req: Request, res: Response) {
       updatedAt: Date.now(),
     };
 
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    fs.writeFileSync(credentialsFile, JSON.stringify(updatedCreds, null, 2), 'utf-8');
+    await saveCredentials(updatedCreds);
 
     return res.json({
       success: true,
@@ -430,11 +586,11 @@ export function handleChangePassword(req: Request, res: Response) {
 }
 
 // POST /api/auth/logout
-export function handleLogout(req: Request, res: Response) {
+export async function handleLogout(req: Request, res: Response) {
   try {
     const token = extractSessionToken(req);
     if (token) {
-      SESSIONS.delete(token);
+      await deleteSession(token);
     }
     return res.json({
       success: true,
@@ -452,7 +608,7 @@ export function handleLogout(req: Request, res: Response) {
 // models, evidence, attempts, sessions, messages, and custom records,
 // restores a clean baseline unassessed state, invalidates all sessions,
 // and deletes private credentials to allow fresh setup.
-export function handleDeleteAccount(req: Request, res: Response) {
+export async function handleDeleteAccount(req: Request, res: Response) {
   try {
     const token = extractSessionToken(req);
     if (!token) {
@@ -462,7 +618,7 @@ export function handleDeleteAccount(req: Request, res: Response) {
       });
     }
 
-    const session = SESSIONS.get(token);
+    const session = await getSessionByToken(token);
     if (!session || Date.now() > session.expiresAt) {
       return res.status(401).json({
         success: false,
@@ -474,79 +630,77 @@ export function handleDeleteAccount(req: Request, res: Response) {
     const now = new Date().toISOString();
 
     // 1. Transactional cleanup of all learner-owned data
-    db.exec('BEGIN TRANSACTION;');
-
-    try {
+    await db.transaction(async () => {
       // Clear active learning context
-      db.prepare('DELETE FROM active_learning_context WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM active_learning_context WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear adaptive evidence
-      db.prepare('DELETE FROM adaptive_evidence WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM adaptive_evidence WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear question attempts
-      db.prepare('DELETE FROM question_attempts WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM question_attempts WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear simulation attempts
-      db.prepare('DELETE FROM simulation_attempts WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM simulation_attempts WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear reconstructions
-      db.prepare('DELETE FROM reconstructions WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM reconstructions WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
-      // Clear mechanism evaluations and mechanism errors
-      db.prepare(`
-        DELETE FROM mechanism_errors 
-        WHERE evaluation_id IN (
-          SELECT id FROM mechanism_evaluations 
-          WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ? OR user_id = ?)
-          OR session_id IN (SELECT id FROM learning_sessions WHERE user_id = ? OR user_id = ?)
-        )
-      `).run(userId, DEFAULT_USER_ID, userId, DEFAULT_USER_ID);
+      // Clear mechanism evaluations and errors
+      await db.run(
+        `DELETE FROM mechanism_errors 
+         WHERE evaluation_id IN (
+           SELECT id FROM mechanism_evaluations 
+           WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ? OR user_id = ?)
+           OR session_id IN (SELECT id FROM learning_sessions WHERE user_id = ? OR user_id = ?)
+         )`,
+        userId, DEFAULT_USER_ID, userId, DEFAULT_USER_ID
+      );
 
-      db.prepare(`
-        DELETE FROM mechanism_evaluations 
-        WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ? OR user_id = ?)
-        OR session_id IN (SELECT id FROM learning_sessions WHERE user_id = ? OR user_id = ?)
-      `).run(userId, DEFAULT_USER_ID, userId, DEFAULT_USER_ID);
+      await db.run(
+        `DELETE FROM mechanism_evaluations 
+         WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ? OR user_id = ?)
+         OR session_id IN (SELECT id FROM learning_sessions WHERE user_id = ? OR user_id = ?)`,
+        userId, DEFAULT_USER_ID, userId, DEFAULT_USER_ID
+      );
 
       // Clear learning sessions
-      db.prepare('DELETE FROM learning_sessions WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM learning_sessions WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear chat messages and conversations
-      db.prepare(`
-        DELETE FROM chat_messages 
-        WHERE conversation_id IN (SELECT id FROM chat_conversations WHERE user_id = ? OR user_id = ?)
-      `).run(userId, DEFAULT_USER_ID);
-      db.prepare('DELETE FROM chat_conversations WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run(
+        `DELETE FROM chat_messages 
+         WHERE conversation_id IN (SELECT id FROM chat_conversations WHERE user_id = ? OR user_id = ?)`,
+        userId, DEFAULT_USER_ID
+      );
+      await db.run('DELETE FROM chat_conversations WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear custom mechanisms created by user, retaining canonical mechanism
-      db.prepare('DELETE FROM mechanisms WHERE (user_id = ? OR user_id = ?) AND id != ?').run(userId, DEFAULT_USER_ID, 'mech_damped_oscillator');
+      await db.run('DELETE FROM mechanisms WHERE (user_id = ? OR user_id = ?) AND id != ?', userId, DEFAULT_USER_ID, 'mech_damped_oscillator');
 
       // Clear errors table
-      db.prepare('DELETE FROM errors WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM errors WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear user custom topics if any
-      db.prepare("DELETE FROM topics WHERE id LIKE 'top_custom_%'").run();
+      await db.run("DELETE FROM topics WHERE id LIKE 'top_custom_%'");
 
       // Clear user_model
-      db.prepare('DELETE FROM user_model WHERE user_id = ? OR user_id = ?').run(userId, DEFAULT_USER_ID);
+      await db.run('DELETE FROM user_model WHERE user_id = ? OR user_id = ?', userId, DEFAULT_USER_ID);
 
       // Clear users table entry
-      db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+      await db.run('DELETE FROM users WHERE id = ?', userId);
       if (userId !== DEFAULT_USER_ID) {
-        db.prepare('DELETE FROM users WHERE id = ?').run(DEFAULT_USER_ID);
+        await db.run('DELETE FROM users WHERE id = ?', DEFAULT_USER_ID);
       }
 
       // Recreate baseline user identity
-      db.prepare(`
-        INSERT INTO users (id, name, created_at, updated_at)
-        VALUES (?, 'BSc Physics Scholar', ?, ?)
-      `).run(DEFAULT_USER_ID, now, now);
+      await db.run(
+        `INSERT INTO users (id, name, created_at, updated_at)
+         VALUES (?, 'BSc Physics Scholar', ?, ?) ON CONFLICT (id) DO NOTHING`,
+        DEFAULT_USER_ID, now, now
+      );
 
       // Re-seed default errors
-      const insertError = db.prepare(`
-        INSERT INTO errors (id, user_id, category, description, severity, frequency, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
       const defaultErrors = [
         { id: 'err_assoc_causation', category: 'Causal Reasoning', description: 'Association → Causation Confounding', severity: 'high' },
         { id: 'err_directionality_inversion', category: 'Mechanism Reasoning', description: 'Directionality Inversion in Dynamic Flux Chains', severity: 'high' },
@@ -555,7 +709,11 @@ export function handleDeleteAccount(req: Request, res: Response) {
         { id: 'err_missing_variable', category: 'Variable Accounting', description: 'Missing Compensatory Feedback or State Variable', severity: 'high' },
       ];
       for (const e of defaultErrors) {
-        insertError.run(e.id, DEFAULT_USER_ID, e.category, e.description, e.severity, 0, now, now);
+        await db.run(
+          `INSERT INTO errors (id, user_id, category, description, severity, frequency, first_seen, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+          e.id, DEFAULT_USER_ID, e.category, e.description, e.severity, 0, now, now
+        );
       }
 
       // Re-seed baseline unassessed user_model
@@ -582,12 +740,11 @@ export function handleDeleteAccount(req: Request, res: Response) {
         decision_commit_efficiency: 'Pending Assessment',
       });
 
-      db.prepare(`
-        INSERT INTO user_model (
+      await db.run(
+        `INSERT INTO user_model (
           id, user_id, reasoning_profile, topic_mastery, error_profile,
           confidence_calibration, cognitive_resource_allocation, recommended_difficulty, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
         'model_' + DEFAULT_USER_ID,
         DEFAULT_USER_ID,
         initialReasoningProfile,
@@ -599,13 +756,12 @@ export function handleDeleteAccount(req: Request, res: Response) {
         now
       );
 
-      // Ensure canonical mechanism exists
-      const mechCheck = db.prepare('SELECT id FROM mechanisms WHERE id = ?').get('mech_damped_oscillator');
+      // Re-seed canonical mechanism if needed
+      const mechCheck = await db.get('SELECT id FROM mechanisms WHERE id = ?', 'mech_damped_oscillator');
       if (!mechCheck) {
-        db.prepare(`
-          INSERT INTO mechanisms (id, user_id, topic_id, title, user_explanation, canonical_mechanism, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+        await db.run(
+          `INSERT INTO mechanisms (id, user_id, topic_id, title, user_explanation, canonical_mechanism, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
           'mech_damped_oscillator',
           DEFAULT_USER_ID,
           'top_damped_oscillator',
@@ -635,25 +791,22 @@ EXCEPTION:
         );
       }
 
-      db.exec('COMMIT;');
-    } catch (dbErr) {
-      db.exec('ROLLBACK;');
-      console.error('Error during database account reset:', dbErr);
-      throw dbErr;
-    }
+      // Delete from private_auth and private_sessions
+      await db.run('DELETE FROM private_auth WHERE id = ?', 'current_private_auth');
+      await db.run('DELETE FROM private_sessions');
+    });
 
-    // 2. Permanently delete the stored private credentials file
-    if (fs.existsSync(credentialsFile)) {
+    // Clear caches
+    cachedCredentials = null;
+    SESSIONS.clear();
+
+    if (!isPostgres && fs.existsSync(credentialsFile)) {
       try {
         fs.unlinkSync(credentialsFile);
-      } catch (unlinkErr) {
-        console.error('Failed to unlink credentials file, overwriting with uninitialized state:', unlinkErr);
+      } catch {
         fs.writeFileSync(credentialsFile, JSON.stringify({ initialized: false }), 'utf-8');
       }
     }
-
-    // 3. Invalidate all active authenticated sessions
-    SESSIONS.clear();
 
     return res.json({
       success: true,
@@ -681,17 +834,17 @@ export function extractSessionToken(req: Request): string | null {
   return null;
 }
 
-export function getAuthenticatedUserId(req?: Request): string {
+export async function getAuthenticatedUserId(req?: Request): Promise<string> {
   if (req) {
     const token = extractSessionToken(req);
     if (token) {
-      const session = SESSIONS.get(token);
+      const session = await getSessionByToken(token);
       if (session && Date.now() <= session.expiresAt) {
         return session.username || 'user_physics_scholar';
       }
     }
   }
-  const creds = getStoredCredentials();
+  const creds = await getStoredCredentials();
   if (creds && creds.username) {
     return creds.username;
   }

@@ -55,13 +55,13 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   app.delete('/api/auth/account', handleDeleteAccount);
 
   // Subjects
-  app.get('/api/subjects', (req: Request, res: Response) => {
+  app.get('/api/subjects', async (req: Request, res: Response) => {
     try {
-      const subjects = db.prepare(`
+      const subjects = await db.all(`
         SELECT s.*, (SELECT count(*) FROM topics t WHERE t.subject_id = s.id) as topicCount
         FROM subjects s
         ORDER BY s.name ASC
-      `).all();
+      `);
       res.json({ success: true, data: subjects });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -69,25 +69,25 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Topics
-  app.get('/api/topics', (req: Request, res: Response) => {
+  app.get('/api/topics', async (req: Request, res: Response) => {
     try {
       const { subject_id } = req.query;
       let topics;
       if (subject_id) {
-        topics = db.prepare(`
+        topics = await db.all(`
           SELECT t.*, COALESCE(s.name, 'General Concepts') as subject_name
           FROM topics t
           LEFT JOIN subjects s ON t.subject_id = s.id
           WHERE t.subject_id = ?
           ORDER BY t.name ASC
-        `).all(subject_id as string);
+        `, subject_id as string);
       } else {
-        topics = db.prepare(`
+        topics = await db.all(`
           SELECT t.*, COALESCE(s.name, 'General Concepts') as subject_name
           FROM topics t
           LEFT JOIN subjects s ON t.subject_id = s.id
           ORDER BY (CASE WHEN t.id LIKE 'top_custom_%' THEN 0 ELSE 1 END), s.name ASC, t.name ASC
-        `).all();
+        `);
       }
       res.json({ success: true, data: topics });
     } catch (err: any) {
@@ -96,7 +96,7 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Create Custom Topic
-  app.post('/api/topics', (req: Request, res: Response) => {
+  app.post('/api/topics', async (req: Request, res: Response) => {
     try {
       const { name, subject_id, chapter, description } = req.body;
       if (!name || !name.trim()) {
@@ -106,12 +106,12 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
       const trimmedName = name.trim();
 
       // Check if topic with this exact name already exists
-      const existing = db.prepare(`
+      const existing = await db.get(`
         SELECT t.*, COALESCE(s.name, 'General Concepts') as subject_name
         FROM topics t
         LEFT JOIN subjects s ON t.subject_id = s.id
         WHERE LOWER(t.name) = LOWER(?)
-      `).get(trimmedName) as any;
+      `, trimmedName) as any;
 
       if (existing) {
         return res.json({ success: true, data: existing, existing: true });
@@ -122,12 +122,12 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
       const finalChapter = chapter || 'Custom Concepts';
       const finalDesc = description || `User-defined Physics reasoning topic: ${trimmedName}`;
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO topics (id, subject_id, name, chapter, description)
         VALUES (?, ?, ?, ?, ?)
-      `).run(id, finalSubjectId, trimmedName, finalChapter, finalDesc);
+      `, id, finalSubjectId, trimmedName, finalChapter, finalDesc);
 
-      const subjectRow = db.prepare('SELECT name FROM subjects WHERE id = ?').get(finalSubjectId) as any;
+      const subjectRow = await db.get('SELECT name FROM subjects WHERE id = ?', finalSubjectId) as any;
       const subjectName = subjectRow ? subjectRow.name : 'General Concepts';
 
       const newTopic = {
@@ -142,8 +142,8 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
       // Register into user_model topic_mastery
       try {
-        const userId = getAuthenticatedUserId(req);
-        const row = db.prepare('SELECT topic_mastery FROM user_model WHERE user_id = ?').get(userId) as any;
+        const userId = await getAuthenticatedUserId(req);
+        const row = await db.get('SELECT topic_mastery FROM user_model WHERE user_id = ?', userId) as any;
         if (row) {
           const masteryMap = JSON.parse(row.topic_mastery || '{}');
           masteryMap[id] = {
@@ -152,7 +152,7 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
             status: 'Calibrating',
             last_practiced: new Date().toISOString(),
           };
-          db.prepare('UPDATE user_model SET topic_mastery = ?, updated_at = ? WHERE user_id = ?').run(
+          await db.run('UPDATE user_model SET topic_mastery = ?, updated_at = ? WHERE user_id = ?',
             JSON.stringify(masteryMap),
             new Date().toISOString(),
             userId
@@ -169,10 +169,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Delete Custom Topic
-  app.delete('/api/topics/:id', (req: Request, res: Response) => {
+  app.delete('/api/topics/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      db.prepare('DELETE FROM topics WHERE id = ?').run(id);
+      await db.run('DELETE FROM topics WHERE id = ?', id);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -180,10 +180,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // User Model & Personal Cognition Profile (Dynamically computed from adaptive engine)
-  app.get('/api/user-model', (req: Request, res: Response) => {
+  app.get('/api/user-model', async (req: Request, res: Response) => {
     try {
-      const userId = getAuthenticatedUserId(req);
-      const userModel = computeAdaptiveUserModel(userId);
+      const userId = await getAuthenticatedUserId(req);
+      const userModel = await computeAdaptiveUserModel(userId);
       res.json({
         success: true,
         data: userModel,
@@ -194,17 +194,17 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Reset User Model & Test History back to unassessed baseline safely scoped to this user only
-  app.post('/api/user-model/reset', (req: Request, res: Response) => {
+  app.post('/api/user-model/reset', async (req: Request, res: Response) => {
     try {
-      const userId = getAuthenticatedUserId(req);
-      db.prepare('DELETE FROM question_attempts WHERE user_id = ?').run(userId);
-      db.prepare('DELETE FROM mechanism_evaluations WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ?)').run(userId);
-      db.prepare('DELETE FROM reconstructions WHERE user_id = ?').run(userId);
-      db.prepare('DELETE FROM adaptive_evidence WHERE user_id = ?').run(userId);
-      db.prepare('DELETE FROM active_learning_context WHERE user_id = ?').run(userId);
-      db.prepare('DELETE FROM user_model WHERE user_id = ?').run(userId);
-      ensureAdaptiveUserModel(userId);
-      const freshModel = computeAdaptiveUserModel(userId);
+      const userId = await getAuthenticatedUserId(req);
+      await db.run('DELETE FROM question_attempts WHERE user_id = ?', userId);
+      await db.run('DELETE FROM mechanism_evaluations WHERE mechanism_id IN (SELECT id FROM mechanisms WHERE user_id = ?)', userId);
+      await db.run('DELETE FROM reconstructions WHERE user_id = ?', userId);
+      await db.run('DELETE FROM adaptive_evidence WHERE user_id = ?', userId);
+      await db.run('DELETE FROM active_learning_context WHERE user_id = ?', userId);
+      await db.run('DELETE FROM user_model WHERE user_id = ?', userId);
+      await ensureAdaptiveUserModel(userId);
+      const freshModel = await computeAdaptiveUserModel(userId);
       res.json({ success: true, data: freshModel });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -212,10 +212,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Cross-Context Active Flaws Summary for Learner Dashboard and Adaptation
-  app.get('/api/user-model/flaws', (req: Request, res: Response) => {
+  app.get('/api/user-model/flaws', async (req: Request, res: Response) => {
     try {
-      const userId = getAuthenticatedUserId(req);
-      const summary = getUserCognitiveFlawSummary(userId);
+      const userId = await getAuthenticatedUserId(req);
+      const summary = await getUserCognitiveFlawSummary(userId);
       res.json({ success: true, data: summary });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -225,12 +225,12 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   // CENTRAL ADAPTIVE EVIDENCE ENDPOINTS
 
   // Dynamic Next Best Task on Demand
-  app.get('/api/adaptive/next-task', (req: Request, res: Response) => {
+  app.get('/api/adaptive/next-task', async (req: Request, res: Response) => {
     try {
       const topic_id = req.query.topic_id as string | undefined;
       const current_mode = req.query.current_mode as string | undefined;
-      const userId = getAuthenticatedUserId(req);
-      const nextTask = deriveNextBestTask({
+      const userId = await getAuthenticatedUserId(req);
+      const nextTask = await deriveNextBestTask({
         userId,
         selectedTopicId: topic_id,
         currentMode: current_mode,
@@ -242,18 +242,18 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Query Recent Adaptive Evidence Records
-  app.get('/api/adaptive/evidence', (req: Request, res: Response) => {
+  app.get('/api/adaptive/evidence', async (req: Request, res: Response) => {
     try {
       const limit = Math.min(100, Number(req.query.limit) || 40);
-      const userId = getAuthenticatedUserId(req);
-      const rows = db.prepare(`
+      const userId = await getAuthenticatedUserId(req);
+      const rows = await db.all(`
         SELECT e.*, t.name as topic_name
         FROM adaptive_evidence e
         LEFT JOIN topics t ON e.topic_id = t.id
         WHERE e.user_id = ?
         ORDER BY e.created_at DESC
         LIMIT ?
-      `).all(userId, limit);
+      `, userId, limit);
       res.json({ success: true, data: rows });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -261,9 +261,9 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Ingest Manual or External Diagnostic Evidence
-  app.post('/api/adaptive/evidence', (req: Request, res: Response) => {
+  app.post('/api/adaptive/evidence', async (req: Request, res: Response) => {
     try {
-      const evidence = processAdaptiveEvidence(req.body);
+      const evidence = await processAdaptiveEvidence(req.body);
       res.json({ success: true, data: evidence });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -271,9 +271,9 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Active Learning Context Endpoints (Authoritative Shared Context across all tools)
-  app.get('/api/learning-context', (req: Request, res: Response) => {
+  app.get('/api/learning-context', async (req: Request, res: Response) => {
     try {
-      const activeRow = db.prepare('SELECT * FROM active_learning_context WHERE id = ?').get('current_active_context') as any;
+      const activeRow = await db.get('SELECT * FROM active_learning_context WHERE id = ?', 'current_active_context') as any;
       if (activeRow) {
         return res.json({
           success: true,
@@ -305,16 +305,16 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
     }
   });
 
-  app.delete('/api/learning-context', (req: Request, res: Response) => {
+  app.delete('/api/learning-context', async (req: Request, res: Response) => {
     try {
-      db.prepare('DELETE FROM active_learning_context WHERE id = ?').run('current_active_context');
+      await db.run('DELETE FROM active_learning_context WHERE id = ?', 'current_active_context');
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post('/api/learning-context', (req: Request, res: Response) => {
+  app.post('/api/learning-context', async (req: Request, res: Response) => {
     try {
       const {
         source,
@@ -336,7 +336,8 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
       }
 
       const now = new Date().toISOString();
-      db.prepare(`
+      const userId = await getAuthenticatedUserId(req);
+      await db.run(`
         INSERT INTO active_learning_context (
           id, user_id, source, topic_id, topic_name, subject_id, conversation_id, conversation_title,
           summary, detected_gaps, key_concepts, unresolved_questions, has_attachments, attachment_names, updated_at
@@ -355,9 +356,9 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
           has_attachments = excluded.has_attachments,
           attachment_names = excluded.attachment_names,
           updated_at = excluded.updated_at
-      `).run(
+      `,
         'current_active_context',
-        getAuthenticatedUserId(req),
+        userId,
         source || 'custom_topic',
         topicId || null,
         topicName.trim(),
@@ -396,10 +397,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
     }
   });
 
-  app.get('/api/chat/conversations/:id/context', (req: Request, res: Response) => {
+  app.get('/api/chat/conversations/:id/context', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const convo = db.prepare('SELECT * FROM chat_conversations WHERE id = ?').get(id) as any;
+      const convo = await db.get('SELECT * FROM chat_conversations WHERE id = ?', id) as any;
       if (!convo) {
         return res.status(404).json({ success: false, error: 'Conversation not found' });
       }
@@ -412,11 +413,11 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
       }
 
       // If no stored learning_context yet, derive from latest message
-      const latestAssistant = db.prepare(`
+      const latestAssistant = await db.get(`
         SELECT content FROM chat_messages
         WHERE conversation_id = ? AND role = 'assistant'
         ORDER BY created_at DESC LIMIT 1
-      `).get(id) as any;
+      `, id) as any;
 
       let extractedContext: any = null;
       if (latestAssistant?.content) {
@@ -426,7 +427,7 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
         }
       }
 
-      const linkedTopic = convo.topic_id ? db.prepare('SELECT name, description FROM topics WHERE id = ?').get(convo.topic_id) as any : null;
+      const linkedTopic = convo.topic_id ? await db.get('SELECT name, description FROM topics WHERE id = ?', convo.topic_id) as any : null;
       const topicName = extractedContext?.topic_name || linkedTopic?.name || convo.title.replace(/[#*_`]/g, '');
       const summary = extractedContext?.summary || linkedTopic?.description || 'Physical reasoning discussion.';
 
@@ -452,34 +453,34 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Chat Conversations
-  app.get('/api/chat/conversations', (req: Request, res: Response) => {
+  app.get('/api/chat/conversations', async (req: Request, res: Response) => {
     try {
-      const userId = getAuthenticatedUserId(req);
-      const convos = db.prepare(`
+      const userId = await getAuthenticatedUserId(req);
+      const convos = await db.all(`
         SELECT c.*, t.name as topic_name,
                (SELECT count(*) FROM chat_messages m WHERE m.conversation_id = c.id) as message_count
         FROM chat_conversations c
         LEFT JOIN topics t ON c.topic_id = t.id
         WHERE c.user_id = ?
         ORDER BY c.updated_at DESC
-      `).all(userId);
+      `, userId);
       res.json({ success: true, data: convos });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post('/api/chat/conversations', (req: Request, res: Response) => {
+  app.post('/api/chat/conversations', async (req: Request, res: Response) => {
     try {
       const { title, topic_id } = req.body;
       const id = 'conv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
       const now = new Date().toISOString();
-      const userId = getAuthenticatedUserId(req);
+      const userId = await getAuthenticatedUserId(req);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO chat_conversations (id, user_id, topic_id, title, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(id, userId, topic_id || null, title || 'New Doubt Session', now, now);
+      `, id, userId, topic_id || null, title || 'New Doubt Session', now, now);
 
       res.json({ success: true, data: { id, title: title || 'New Doubt Session', topic_id, created_at: now } });
     } catch (err: any) {
@@ -487,25 +488,25 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
     }
   });
 
-  app.get('/api/chat/conversations/:id', (req: Request, res: Response) => {
+  app.get('/api/chat/conversations/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const convo = db.prepare(`
+      const convo = await db.get(`
         SELECT c.*, t.name as topic_name
         FROM chat_conversations c
         LEFT JOIN topics t ON c.topic_id = t.id
         WHERE c.id = ?
-      `).get(id) as any;
+      `, id) as any;
 
       if (!convo) {
         return res.status(404).json({ success: false, error: 'Conversation not found' });
       }
 
-      const rawMessages = db.prepare(`
+      const rawMessages = await db.all(`
         SELECT * FROM chat_messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC
-      `).all(id) as any[];
+      `, id) as any[];
 
       const messages = rawMessages.map((m) => ({
         ...m,
@@ -519,12 +520,12 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
     }
   });
 
-  app.patch('/api/chat/conversations/:id', (req: Request, res: Response) => {
+  app.patch('/api/chat/conversations/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { title } = req.body;
       if (title && title.trim()) {
-        db.prepare('UPDATE chat_conversations SET title = ?, updated_at = ? WHERE id = ?').run(
+        await db.run('UPDATE chat_conversations SET title = ?, updated_at = ? WHERE id = ?',
           title.trim(),
           new Date().toISOString(),
           id
@@ -536,12 +537,12 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
     }
   });
 
-  app.delete('/api/chat/conversations/:id', (req: Request, res: Response) => {
+  app.delete('/api/chat/conversations/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       // Explicitly delete both messages and conversation to ensure clean removal
-      db.prepare('DELETE FROM chat_messages WHERE conversation_id = ?').run(id);
-      db.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+      await db.run('DELETE FROM chat_messages WHERE conversation_id = ?', id);
+      await db.run('DELETE FROM chat_conversations WHERE id = ?', id);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -549,10 +550,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Delete all conversations (Clear history)
-  app.delete('/api/chat/conversations', (req: Request, res: Response) => {
+  app.delete('/api/chat/conversations', async (req: Request, res: Response) => {
     try {
-      db.prepare('DELETE FROM chat_messages').run();
-      db.prepare('DELETE FROM chat_conversations').run();
+      await db.run('DELETE FROM chat_messages');
+      await db.run('DELETE FROM chat_conversations');
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -560,10 +561,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
   });
 
   // Delete a specific chat message
-  app.delete('/api/chat/messages/:id', (req: Request, res: Response) => {
+  app.delete('/api/chat/messages/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      db.prepare('DELETE FROM chat_messages WHERE id = ?').run(id);
+      await db.run('DELETE FROM chat_messages WHERE id = ?', id);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -583,9 +584,10 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
       let convId = conversation_id;
       const now = new Date().toISOString();
+      const userId = await getAuthenticatedUserId(req);
 
       // Retrieve cross-context student flaw summary to attack patterns of understanding
-      const flawContext = getUserCognitiveFlawSummary();
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       let basePrompt = trimmedContent || (hasAttachments 
         ? `Please examine the attached experimental file(s) (${attachments.map((a: any) => a.name || a.type).join(', ')}). Dissect the underlying physical mechanisms, distinguishing variables, and theoretical implications from first principles.`
@@ -603,13 +605,12 @@ ${flawContext.prompt_injection}`;
           ? trimmedContent.slice(0, 45).replace(/[#*_`]/g, '') + (trimmedContent.length > 45 ? '...' : '')
           : `Data Ingestion: ${attachments[0]?.name?.slice(0, 30) || 'Attached Files'}`;
 
-        const userId = getAuthenticatedUserId(req);
-        db.prepare(`
+        await db.run(`
           INSERT INTO chat_conversations (id, user_id, topic_id, title, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?)
-        `).run(convId, userId, topic_id || null, conversationTitle, now, now);
+        `, convId, userId, topic_id || null, conversationTitle, now, now);
       } else {
-        const existingConv = db.prepare('SELECT title FROM chat_conversations WHERE id = ?').get(convId) as any;
+        const existingConv = await db.get('SELECT title FROM chat_conversations WHERE id = ?', convId) as any;
         if (existingConv?.title) {
           conversationTitle = existingConv.title;
         }
@@ -625,10 +626,10 @@ ${flawContext.prompt_injection}`;
         dataUrl: a.dataUrl || (a.mimeType.startsWith('image/') ? `data:${a.mimeType};base64,${a.base64Data}` : undefined),
       })) : null;
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO chat_messages (id, conversation_id, role, content, provider, model, attachments, created_at)
         VALUES (?, ?, 'user', ?, ?, ?, ?, ?)
-      `).run(
+      `,
         userMsgId,
         convId,
         trimmedContent || `[Attached: ${attachments.map((a: any) => a.name).join(', ')}]`,
@@ -639,12 +640,12 @@ ${flawContext.prompt_injection}`;
       );
 
       // Fetch last 4 messages for compact history
-      const historyRows = db.prepare(`
+      const historyRows = await db.all(`
         SELECT role, content FROM chat_messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC
         LIMIT 6
-      `).all(convId) as Array<{ role: 'user' | 'assistant'; content: string }>;
+      `, convId) as Array<{ role: 'user' | 'assistant'; content: string }>;
 
       // Map attachments for Gemini inlineData
       const geminiAttachments = hasAttachments ? attachments.map((a: any) => ({
@@ -667,10 +668,10 @@ ${flawContext.prompt_injection}`;
         anti_overanalysis_flag: geminiResult.metadata?.anti_overanalysis_flag || false,
       });
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO chat_messages (id, conversation_id, role, content, provider, model, classification, metadata, created_at)
         VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         assistantMsgId,
         convId,
         geminiResult.text,
@@ -697,7 +698,7 @@ ${flawContext.prompt_injection}`;
       }
 
       // Fallback topic name extraction if not structured
-      const linkedTopic = topic_id ? db.prepare('SELECT name, description, subject_id FROM topics WHERE id = ?').get(topic_id) as any : null;
+      const linkedTopic = topic_id ? await db.get('SELECT name, description, subject_id FROM topics WHERE id = ?', topic_id) as any : null;
       const topicName = extractedContext?.topic_name?.trim() || linkedTopic?.name || trimmedContent.slice(0, 45).replace(/[#*_`]/g, '');
       const summary = extractedContext?.summary?.trim() || linkedTopic?.description || 'Extracted from Doubt Chat physical inquiry dialogue.';
       const detectedGaps: string[] = Array.isArray(extractedContext?.detected_gaps) ? extractedContext.detected_gaps : [];
@@ -725,7 +726,7 @@ ${flawContext.prompt_injection}`;
 
       // Persist learning context on conversation record
       try {
-        db.prepare('UPDATE chat_conversations SET learning_context = ?, updated_at = ? WHERE id = ?').run(
+        await db.run('UPDATE chat_conversations SET learning_context = ?, updated_at = ? WHERE id = ?',
           JSON.stringify(fullLearningContext),
           now,
           convId
@@ -736,8 +737,7 @@ ${flawContext.prompt_injection}`;
 
       // Update authoritative active_learning_context table
       try {
-        const userId = getAuthenticatedUserId(req);
-        db.prepare(`
+        await db.run(`
           INSERT INTO active_learning_context (
             id, user_id, source, topic_id, topic_name, subject_id, conversation_id, conversation_title,
             summary, detected_gaps, key_concepts, unresolved_questions, has_attachments, attachment_names, updated_at
@@ -756,7 +756,7 @@ ${flawContext.prompt_injection}`;
             has_attachments = excluded.has_attachments,
             attachment_names = excluded.attachment_names,
             updated_at = excluded.updated_at
-        `).run(
+        `,
           'current_active_context',
           userId,
           'doubt_chat',
@@ -789,8 +789,8 @@ ${flawContext.prompt_injection}`;
         const isCorrection = diagData.type === 'meaningful_correction' || diagData.correct_reasoning === true;
         const targetFlaw = flawContext.flaws.find((f: any) => f.id === errorId);
 
-        processAdaptiveEvidence({
-          user_id: getAuthenticatedUserId(req),
+        await processAdaptiveEvidence({
+          user_id: userId,
           feature: 'doubt_chat',
           topic_id: topic_id || null,
           error_id: errorId,
@@ -841,7 +841,8 @@ ${flawContext.prompt_injection}`;
         return res.status(400).json({ success: false, error: 'User explanation is required' });
       }
 
-      const flawContext = getUserCognitiveFlawSummary();
+      const userId = await getAuthenticatedUserId(req);
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       const prompt = `You are evaluating a BSc Physics student's dynamical mechanism explanation for MECHANISM COMPRESSOR.
 Topic: ${title || 'Classical / Quantum / Electromagnetic Mechanism'}
@@ -947,21 +948,20 @@ At the very end of your response, output a strict JSON block assessing the stude
       const now = new Date().toISOString();
       const evalId = 'eval_' + Date.now();
       const mechId = 'mech_' + Date.now();
-      const userId = getAuthenticatedUserId(req);
 
       // Save mechanism and evaluation to database with actual scores
-      db.prepare(`
+      await db.run(`
         INSERT INTO mechanisms (id, user_id, topic_id, title, user_explanation, canonical_mechanism, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(mechId, userId, topic_id || 'top_damped_oscillator', title || 'Mechanism Compression', user_explanation, cleanFeedback, now, now);
+      `, mechId, userId, topic_id || 'top_damped_oscillator', title || 'Mechanism Compression', user_explanation, cleanFeedback, now, now);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO mechanism_evaluations (
           id, mechanism_id, causal_accuracy, completeness, directionality,
           assumption_quality, discriminator_quality, exception_handling, compression_quality,
           alternative_mechanism_quality, confidence, overall_score, evaluator_feedback, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         evalId,
         mechId,
         causalAccuracy,
@@ -979,7 +979,7 @@ At the very end of your response, output a strict JSON block assessing the stude
       );
 
       // Emit evaluated empirical scores to central adaptive evidence architecture
-      processAdaptiveEvidence({
+      await processAdaptiveEvidence({
         user_id: userId,
         feature: 'compressor',
         topic_id: topic_id || 'top_damped_oscillator',
@@ -1021,7 +1021,8 @@ At the very end of your response, output a strict JSON block assessing the stude
   app.post('/api/adversarial/attack', async (req: Request, res: Response) => {
     try {
       const { model_text, attack_type } = req.body;
-      const flawContext = getUserCognitiveFlawSummary();
+      const userId = await getAuthenticatedUserId(req);
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       let instructionTarget = '';
       switch (attack_type) {
@@ -1059,8 +1060,8 @@ ${flawContext.prompt_injection}`;
       // Emit to central adaptive evidence architecture
       const hasVulnerability = /break|flaw|vulnerab|defect|missing|inversion|contradict|erroneous/i.test(result.text.slice(0, 450));
       const targetFlaw = flawContext.flaws[0];
-      processAdaptiveEvidence({
-        user_id: getAuthenticatedUserId(req),
+      await processAdaptiveEvidence({
+        user_id: userId,
         feature: 'adversarial',
         error_id: targetFlaw?.id || null,
         error_name: targetFlaw?.name || null,
@@ -1083,7 +1084,8 @@ ${flawContext.prompt_injection}`;
   app.post('/api/first-principles', async (req: Request, res: Response) => {
     try {
       const { topic_or_concept } = req.body;
-      const flawContext = getUserCognitiveFlawSummary();
+      const userId = await getAuthenticatedUserId(req);
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       const prompt = `FIRST-PRINCIPLES PHYSICS RECONSTRUCTION:
 Concept to Deconstruct: "${topic_or_concept}"
@@ -1101,8 +1103,8 @@ ${flawContext.prompt_injection}`;
       const result = await queryGemini({ prompt, temperature: 0.15 });
 
       // Emit to central adaptive evidence architecture
-      processAdaptiveEvidence({
-        user_id: getAuthenticatedUserId(req),
+      await processAdaptiveEvidence({
+        user_id: userId,
         feature: 'first_principles',
         robust_mechanism: true,
         correct_reasoning: true,
@@ -1123,7 +1125,8 @@ ${flawContext.prompt_injection}`;
   app.post('/api/reverse-engineering', async (req: Request, res: Response) => {
     try {
       const { observation, user_hypotheses } = req.body;
-      const flawContext = getUserCognitiveFlawSummary();
+      const userId = await getAuthenticatedUserId(req);
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       const prompt = `REVERSE-ENGINEERING MODE:
 Physical / Experimental Observation:
@@ -1148,8 +1151,8 @@ ${flawContext.prompt_injection}`;
       const result = await queryGemini({ prompt, temperature: 0.2 });
 
       // Emit to central adaptive evidence architecture
-      processAdaptiveEvidence({
-        user_id: getAuthenticatedUserId(req),
+      await processAdaptiveEvidence({
+        user_id: userId,
         feature: 'reverse_engineering',
         discriminator_identified: true,
         robust_mechanism: true,
@@ -1167,14 +1170,14 @@ ${flawContext.prompt_injection}`;
   });
 
   // Simulations Endpoints
-  app.get('/api/simulations', (req: Request, res: Response) => {
+  app.get('/api/simulations', async (req: Request, res: Response) => {
     try {
-      const sims = db.prepare(`
+      const sims = await db.all(`
         SELECT s.id, s.topic_id, s.title, s.scenario, s.difficulty, t.name as topic_name,
                s.system_presentation, s.available_investigations, s.available_decisions
         FROM simulations s
         JOIN topics t ON s.topic_id = t.id
-      `).all() as any[];
+      `) as any[];
 
       const parsed = sims.map((s) => ({
         ...s,
@@ -1197,15 +1200,15 @@ ${flawContext.prompt_injection}`;
     }
   });
 
-  app.get('/api/simulations/:id', (req: Request, res: Response) => {
+  app.get('/api/simulations/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const sim = db.prepare(`
+      const sim = await db.get(`
         SELECT s.*, t.name as topic_name
         FROM simulations s
         JOIN topics t ON s.topic_id = t.id
         WHERE s.id = ?
-      `).get(id) as any;
+      `, id) as any;
 
       if (!sim) {
         return res.status(404).json({ success: false, error: 'Simulation not found' });
@@ -1226,10 +1229,10 @@ ${flawContext.prompt_injection}`;
     }
   });
 
-  app.post('/api/simulations/attempt', (req: Request, res: Response) => {
+  app.post('/api/simulations/attempt', async (req: Request, res: Response) => {
     try {
       const { simulation_id, hypotheses, evidence_used, decisions, confidence } = req.body;
-      const sim = db.prepare('SELECT * FROM simulations WHERE id = ?').get(simulation_id) as any;
+      const sim = await db.get('SELECT * FROM simulations WHERE id = ?', simulation_id) as any;
       if (!sim) {
         return res.status(404).json({ success: false, error: 'Simulation not found' });
       }
@@ -1239,25 +1242,25 @@ ${flawContext.prompt_injection}`;
       const hiddenState = JSON.parse(sim.hidden_state || '{}');
 
       // Check for overanalysis (requesting redundant tests when discriminators were already available)
-      const nonDiscriminatorCount = evidence_used.filter((eId: string) => {
+      const nonDiscriminatorCount = (evidence_used || []).filter((eId: string) => {
         const inv = availableInvestigations.find((i: any) => i.id === eId);
         return inv && !inv.is_discriminator;
       }).length;
 
       const overanalyzed = nonDiscriminatorCount >= 2;
-      const chosenDecision = availableDecisions.find((d: any) => decisions.includes(d.id));
+      const chosenDecision = availableDecisions.find((d: any) => (decisions || []).includes(d.id));
       const outcome = chosenDecision?.outcome_feedback || 'Intervention recorded.';
 
       const id = 'sim_att_' + Date.now();
       const now = new Date().toISOString();
-      const userId = getAuthenticatedUserId(req);
+      const userId = await getAuthenticatedUserId(req);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO simulation_attempts (
           id, user_id, simulation_id, hypotheses, evidence_used, decisions,
           confidence, outcome, model_update, unnecessary_investigations_count, overanalyzed, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         id,
         userId,
         simulation_id,
@@ -1273,7 +1276,7 @@ ${flawContext.prompt_injection}`;
       );
 
       // Emit to central adaptive evidence architecture
-      processAdaptiveEvidence({
+      await processAdaptiveEvidence({
         user_id: userId,
         feature: 'simulation',
         topic_id: sim.topic_id,
@@ -1307,35 +1310,35 @@ ${flawContext.prompt_injection}`;
   });
 
   // Tests & MCQs Endpoints - Personalized Adaptive Reasoning Engine
-  app.get('/api/questions', (req: Request, res: Response) => {
+  app.get('/api/questions', async (req: Request, res: Response) => {
     try {
-      const { topic_id, mode } = req.query;
-      let questions;
+      const { topic_id } = req.query;
+      let questions: any[];
       if (topic_id) {
-        questions = db.prepare(`
+        questions = await db.all(`
           SELECT q.*, t.name as topic_name, s.name as subject_name
           FROM questions q
           JOIN topics t ON q.topic_id = t.id
           JOIN subjects s ON t.subject_id = s.id
           WHERE q.topic_id = ?
-        `).all(topic_id as string) as any[];
+        `, topic_id as string) as any[];
 
         if (questions.length === 0) {
-          questions = db.prepare(`
+          questions = await db.all(`
             SELECT q.*, t.name as topic_name, s.name as subject_name
             FROM questions q
             JOIN topics t ON q.topic_id = t.id
             JOIN subjects s ON t.subject_id = s.id
             LIMIT 10
-          `).all() as any[];
+          `) as any[];
         }
       } else {
-        questions = db.prepare(`
+        questions = await db.all(`
           SELECT q.*, t.name as topic_name, s.name as subject_name
           FROM questions q
           JOIN topics t ON q.topic_id = t.id
           JOIN subjects s ON t.subject_id = s.id
-        `).all() as any[];
+        `) as any[];
       }
 
       // Merge curated diagnostic questions into the pool to ensure all 10 archetypes are accessible
@@ -1427,8 +1430,8 @@ ${flawContext.prompt_injection}`;
         context_summary,
         unresolved_questions,
       } = req.body;
-      const userId = getAuthenticatedUserId(req);
-      const row = db.prepare('SELECT error_profile FROM user_model WHERE user_id = ?').get(userId) as any;
+      const userId = await getAuthenticatedUserId(req);
+      const row = await db.get('SELECT error_profile FROM user_model WHERE user_id = ?', userId) as any;
       let errors = INITIAL_HIERARCHICAL_ERRORS;
       if (row?.error_profile) {
         try {
@@ -1465,13 +1468,14 @@ ${flawContext.prompt_injection}`;
         return res.status(400).json({ success: false, error: 'Question ID and answer are required' });
       }
 
+      const userId = await getAuthenticatedUserId(req);
       const evaluation = await evaluateAdaptiveAttempt({
         question_id,
         answer,
         confidence: Number(confidence) || 80,
         reasoning: reasoning || '',
         time_taken: Number(time_taken) || 25,
-        user_id: getAuthenticatedUserId(req),
+        user_id: userId,
       });
 
       res.json({
@@ -1485,14 +1489,14 @@ ${flawContext.prompt_injection}`;
   });
 
   // Close-Book Reconstruction
-  app.get('/api/reconstructions', (req: Request, res: Response) => {
+  app.get('/api/reconstructions', async (req: Request, res: Response) => {
     try {
-      const rows = db.prepare(`
+      const rows = await db.all(`
         SELECT r.*, t.name as topic_name
         FROM reconstructions r
         JOIN topics t ON r.topic_id = t.id
         ORDER BY r.created_at DESC
-      `).all() as any[];
+      `) as any[];
 
       const parsed = rows.map((r) => ({
         ...r,
@@ -1519,9 +1523,10 @@ ${flawContext.prompt_injection}`;
         explanation_mode = 'both',
       } = req.body;
 
-      const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(topic_id) as any;
-      const mech = db.prepare('SELECT * FROM mechanisms WHERE topic_id = ?').get(topic_id) as any;
-      const flawContext = getUserCognitiveFlawSummary();
+      const userId = await getAuthenticatedUserId(req);
+      const topic = await db.get('SELECT * FROM topics WHERE id = ?', topic_id) as any;
+      const mech = await db.get('SELECT * FROM mechanisms WHERE topic_id = ?', topic_id) as any;
+      const flawContext = await getUserCognitiveFlawSummary(userId);
 
       let studentInputSection = '';
       if (paragraph_explanation && paragraph_explanation.trim()) {
@@ -1628,12 +1633,11 @@ ${flawContext.prompt_injection}`;
         recovered_understanding: recoveredUnderstanding,
       };
 
-      const userId = getAuthenticatedUserId(req);
-      db.prepare(`
+      await db.run(`
         INSERT INTO reconstructions (
           id, user_id, topic_id, source_mechanism, user_reconstruction, evaluation, score, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
         id,
         userId,
         topic_id,
@@ -1653,7 +1657,7 @@ ${flawContext.prompt_injection}`;
       );
 
       // Emit to central adaptive evidence architecture
-      processAdaptiveEvidence({
+      await processAdaptiveEvidence({
         user_id: userId,
         feature: 'reconstruction',
         topic_id: topic_id,
@@ -1677,19 +1681,19 @@ ${flawContext.prompt_injection}`;
   });
 
   // History aggregator
-  app.get('/api/history', (req: Request, res: Response) => {
+  app.get('/api/history', async (req: Request, res: Response) => {
     try {
-      const userId = getAuthenticatedUserId(req);
-      const recentDoubts = db.prepare(`
+      const userId = await getAuthenticatedUserId(req);
+      const recentDoubts = await db.all(`
         SELECT c.id, c.title, c.created_at, t.name as topic_name
         FROM chat_conversations c
         LEFT JOIN topics t ON c.topic_id = t.id
         WHERE c.user_id = ?
         ORDER BY c.created_at DESC
         LIMIT 10
-      `).all(userId);
+      `, userId);
 
-      const recentMechanisms = db.prepare(`
+      const recentMechanisms = await db.all(`
         SELECT m.id, m.title, m.created_at, e.overall_score, t.name as topic_name
         FROM mechanisms m
         LEFT JOIN mechanism_evaluations e ON e.mechanism_id = m.id
@@ -1697,9 +1701,9 @@ ${flawContext.prompt_injection}`;
         WHERE m.user_id = ?
         ORDER BY m.created_at DESC
         LIMIT 10
-      `).all(userId);
+      `, userId);
 
-      const recentSimulations = db.prepare(`
+      const recentSimulations = await db.all(`
         SELECT a.id, s.title, a.created_at, a.overanalyzed, a.confidence, a.hypotheses, a.outcome, a.model_update, t.name as topic_name
         FROM simulation_attempts a
         JOIN simulations s ON a.simulation_id = s.id
@@ -1707,18 +1711,18 @@ ${flawContext.prompt_injection}`;
         WHERE a.user_id = ?
         ORDER BY a.created_at DESC
         LIMIT 10
-      `).all(userId);
+      `, userId);
 
-      const recentReconstructions = db.prepare(`
+      const recentReconstructions = await db.all(`
         SELECT r.id, t.name as topic_name, r.score, r.created_at, r.user_reconstruction
         FROM reconstructions r
         JOIN topics t ON r.topic_id = t.id
         WHERE r.user_id = ?
         ORDER BY r.created_at DESC
         LIMIT 10
-      `).all(userId);
+      `, userId);
 
-      const recentQuestions = db.prepare(`
+      const recentQuestions = await db.all(`
         SELECT qa.id, qa.created_at, qa.correct, qa.confidence, qa.time_taken, qa.reasoning, qa.reasoning_error,
                q.question_text, q.mode, q.difficulty, t.name as topic_name
         FROM question_attempts qa
@@ -1727,7 +1731,7 @@ ${flawContext.prompt_injection}`;
         WHERE qa.user_id = ?
         ORDER BY qa.created_at DESC
         LIMIT 15
-      `).all(userId);
+      `, userId);
 
       res.json({
         success: true,
@@ -1745,9 +1749,20 @@ ${flawContext.prompt_injection}`;
   });
 
   // Settings endpoint
-  app.get('/api/settings', (req: Request, res: Response) => {
+  app.get('/api/settings', async (req: Request, res: Response) => {
     try {
-      const tableCountResult = db.prepare(`SELECT count(*) as count FROM sqlite_master WHERE type='table'`).get() as any;
+      const isPg = Boolean(process.env.DATABASE_URL);
+      let tableCount = 17;
+      try {
+        if (isPg) {
+          const row = await db.get("SELECT count(*) as count FROM information_schema.tables WHERE table_schema = 'public'") as any;
+          if (row?.count) tableCount = Number(row.count);
+        } else {
+          const row = await db.get("SELECT count(*) as count FROM sqlite_master WHERE type='table'") as any;
+          if (row?.count) tableCount = Number(row.count);
+        }
+      } catch {}
+
       res.json({
         success: true,
         data: {
@@ -1755,11 +1770,11 @@ ${flawContext.prompt_injection}`;
           model: CURRENT_MODEL,
           hasApiKey: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
           environment: process.env.NODE_ENV || 'development',
-          databaseDriver: 'Node.js Native SQLite (node:sqlite DatabaseSync)',
-          databasePath: './data/mechanism.db',
-          tableCount: tableCountResult?.count || 17,
-          foreignKeys: 'PRAGMA foreign_keys = ON (Enforced)',
-          journalMode: 'WAL (Write-Ahead Logging)',
+          databaseDriver: isPg ? 'PostgreSQL (Neon / node-postgres)' : 'Node.js Native SQLite (node:sqlite DatabaseSync)',
+          databasePath: isPg ? 'Neon Cloud PostgreSQL Cluster' : './data/mechanism.db',
+          tableCount,
+          foreignKeys: isPg ? 'PostgreSQL Relational Foreign Keys' : 'PRAGMA foreign_keys = ON (Enforced)',
+          journalMode: isPg ? 'PostgreSQL WAL' : 'WAL (Write-Ahead Logging)',
           sdk: '@google/genai (Interactions API)',
           securityProtocol: 'Strict Server-Side Key Encapsulation',
           costControl: 'Single Request per Query / Zero Duplicate Calls',
