@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Subject, Topic, UserModel, ActiveLearningContext } from './types';
 import { Header } from './components/Header';
-import { Navigation, NavTab } from './components/Navigation';
+import { CollapsibleSidebar } from './components/CollapsibleSidebar';
+import { NavTab } from './components/Navigation';
+import { MobileNavDrawer } from './components/MobileNavDrawer';
 import { DashboardPage } from './pages/DashboardPage';
 import { DoubtChatPage } from './pages/DoubtChatPage';
 import { CompressorPage } from './pages/CompressorPage';
@@ -20,6 +22,7 @@ import { FirstRunInitExperience } from './components/auth/FirstRunInitExperience
 import { SessionGreetingToast, getTimeAwareGreeting } from './components/auth/SessionGreetingToast';
 import { MechanismLogo } from './components/branding/MechanismLogo';
 import { NoirBackground } from './components/layout/NoirBackground';
+import { WccOnboardingModal } from './components/wcc/WccOnboardingModal';
 
 export default function App() {
   // Authentication state for private MECHANISM application
@@ -36,6 +39,8 @@ export default function App() {
   // Default opening experience is Doubt Chat per user requirement
   const [activeTab, setActiveTab] = useState<NavTab>('doubt_chat');
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
+  const [mobileNavOpen, setMobileNavOpen] = useState<boolean>(false);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState<boolean>(false);
 
   // Check prefers-reduced-motion for smooth accessible fade-in
   useEffect(() => {
@@ -511,179 +516,199 @@ export default function App() {
         userDisplayName={sessionUser?.displayName}
         onLogout={handleLogout}
         onNavigateToSettings={() => setActiveTab('settings')}
+        onOpenMobileMenu={() => setMobileNavOpen(true)}
       />
 
-      {/* Primary Navigation Tabs */}
-      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* Main Layout Container with Collapsible Sidebar & Workspace */}
+      <div className="flex flex-1 min-h-0">
+        <CollapsibleSidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isExpanded={isSidebarExpanded}
+          onToggleExpand={() => setIsSidebarExpanded(!isSidebarExpanded)}
+        />
 
-      {/* Main Content Area */}
-      <main
-        className={`flex-1 w-full ${
-          activeTab === 'doubt_chat'
-            ? 'h-[calc(100vh-100px)] overflow-hidden p-0 max-w-full flex flex-col'
-            : 'max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5'
-        }`}
-      >
-        {activeTab === 'dashboard' && (
-          <DashboardPage
-            userModel={userModel}
-            topics={topics}
-            activeContext={activeContext}
-            onNavigate={setActiveTab}
-            onSelectTopic={handleSelectTopic}
-          />
-        )}
+        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+          {/* Main Content Area */}
+          <main
+            className={`flex-1 w-full ${
+              activeTab === 'doubt_chat'
+                ? 'h-[calc(100vh-61px)] overflow-hidden p-0 max-w-full flex flex-col'
+                : 'max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5'
+            }`}
+          >
+            {activeTab === 'dashboard' && (
+              <DashboardPage
+                userModel={userModel}
+                topics={topics}
+                activeContext={activeContext}
+                onNavigate={setActiveTab}
+                onSelectTopic={handleSelectTopic}
+              />
+            )}
 
-        {activeTab === 'doubt_chat' && (
-          <DoubtChatPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            onContextChange={handleContextChange}
-            onNavigate={setActiveTab}
-          />
-        )}
+            {activeTab === 'doubt_chat' && (
+              <DoubtChatPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                onContextChange={handleContextChange}
+                onNavigate={setActiveTab}
+              />
+            )}
 
-        {activeTab === 'compressor' && (
-          <CompressorPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'compressor' && (
+              <CompressorPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'first_principles' && (
-          <FirstPrinciplesPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'first_principles' && (
+              <FirstPrinciplesPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'adversarial' && (
-          <AdversarialPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'adversarial' && (
+              <AdversarialPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'reverse_engineering' && (
-          <ReverseEngineeringPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'reverse_engineering' && (
+              <ReverseEngineeringPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'simulation' && (
-          <SimulationPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'simulation' && (
+              <SimulationPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'mcq_test' && (
-          <TestEnginePage
-            selectedTopic={selectedTopic}
-            topics={topics}
-            userModel={userModel}
-            activeContext={activeContext}
-            onRefreshUserModel={refreshUserModel}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'mcq_test' && (
+              <TestEnginePage
+                selectedTopic={selectedTopic}
+                topics={topics}
+                userModel={userModel}
+                activeContext={activeContext}
+                onRefreshUserModel={refreshUserModel}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'reconstruction' && (
-          <ReconstructionPage
-            selectedTopic={selectedTopic}
-            activeContext={activeContext}
-            topics={topics}
-            onRefreshUserModel={refreshUserModel}
-            onSelectTopic={handleSelectTopic}
-            onNavigate={setActiveTab}
-            onNewDiscussion={() => {
-              handleContextChange(null);
-              setActiveTab('doubt_chat');
-            }}
-          />
-        )}
+            {activeTab === 'reconstruction' && (
+              <ReconstructionPage
+                selectedTopic={selectedTopic}
+                activeContext={activeContext}
+                topics={topics}
+                onRefreshUserModel={refreshUserModel}
+                onSelectTopic={handleSelectTopic}
+                onNavigate={setActiveTab}
+                onNewDiscussion={() => {
+                  handleContextChange(null);
+                  setActiveTab('doubt_chat');
+                }}
+              />
+            )}
 
-        {activeTab === 'user_model' && (
-          <PersonalModelPage
-            userModel={userModel}
-            onNavigate={setActiveTab}
-            onRefreshUserModel={refreshUserModel}
-          />
-        )}
+            {activeTab === 'user_model' && (
+              <PersonalModelPage
+                userModel={userModel}
+                onNavigate={setActiveTab}
+                onRefreshUserModel={refreshUserModel}
+              />
+            )}
 
-        {activeTab === 'history' && (
-          <HistoryPage
-            onNavigate={setActiveTab}
-            onContextChange={handleContextChange}
-            onSelectTopic={handleSelectTopic}
-          />
-        )}
+            {activeTab === 'history' && (
+              <HistoryPage
+                onNavigate={setActiveTab}
+                onContextChange={handleContextChange}
+                onSelectTopic={handleSelectTopic}
+              />
+            )}
 
-        {activeTab === 'settings' && (
-          <SettingsPage onDeleteAccountComplete={handleAccountDeleted} />
-        )}
-      </main>
+            {activeTab === 'settings' && (
+              <SettingsPage onDeleteAccountComplete={handleAccountDeleted} />
+            )}
+          </main>
 
-      {/* Academic Footer - hidden during Doubt Chat to give full classic AI chat immersion */}
-      {activeTab !== 'doubt_chat' && (
-        <footer className="border-t border-white/[0.08] py-3 bg-[#07080c]/80 backdrop-blur-sm">
-          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] font-mono text-slate-500">
-            <div>
-              <span className="font-bold tracking-wider text-slate-200">MECHANISM</span>
-              <span className="text-slate-400"> • Reasoning-First Physics Cognitive Engine</span>
-            </div>
-            <div className="flex items-center gap-4 text-slate-500">
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80" />
-                AI: Gemini 3 Flash
-              </span>
-              <span>Database: SQLite (PRAGMA foreign_keys)</span>
-              <span>Security: Zero-Client Secrets</span>
-            </div>
-          </div>
-        </footer>
-      )}
+          {/* Academic Footer - hidden during Doubt Chat to give full classic AI chat immersion */}
+          {activeTab !== 'doubt_chat' && (
+            <footer className="border-t border-white/[0.08] py-3 bg-[#07080c]/80 backdrop-blur-sm">
+              <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] font-mono text-slate-500">
+                <div>
+                  <span className="font-bold tracking-wider text-slate-200">MECHANISM</span>
+                  <span className="text-slate-400"> • Reasoning-First Physics Learning Platform</span>
+                </div>
+                <div className="text-slate-500 text-[11px]">
+                  Academic Physics Cognitive Engine
+                </div>
+              </div>
+            </footer>
+          )}
+        </div>
+      </div>
+
+      {/* Mobile Navigation Slide-Out Drawer */}
+      <MobileNavDrawer
+        isOpen={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        userDisplayName={sessionUser?.displayName}
+        onLogout={handleLogout}
+        onNavigateToSettings={() => setActiveTab('settings')}
+        activeModeLabel={activeModeLabelMap[activeTab]}
+      />
+
+      {/* WCC Academic & Textbook First-Login Onboarding Experience */}
+      <WccOnboardingModal onCompleted={() => loadApplicationData()} />
       </motion.div>
   </div>
 );

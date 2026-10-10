@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Subject, Topic, ActiveLearningContext } from '../types';
-import { Sparkles, Plus, Check, X, Edit3, MessageSquare, LogOut, SlidersHorizontal, ChevronDown } from 'lucide-react';
+import { Sparkles, Plus, Check, X, Edit3, MessageSquare, LogOut, SlidersHorizontal, ChevronDown, Menu } from 'lucide-react';
 import { MechanismLogo } from './branding/MechanismLogo';
 
 interface HeaderProps {
@@ -16,6 +16,7 @@ interface HeaderProps {
   userDisplayName?: string;
   onLogout?: () => void;
   onNavigateToSettings?: () => void;
+  onOpenMobileMenu?: () => void;
 }
 
 const CUSTOM_TOPIC_SUGGESTIONS = [
@@ -40,6 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
   userDisplayName,
   onLogout,
   onNavigateToSettings,
+  onOpenMobileMenu,
 }) => {
   const [isCustomMode, setIsCustomMode] = useState(false);
   const [customInputText, setCustomInputText] = useState('');
@@ -139,7 +141,16 @@ export const Header: React.FC<HeaderProps> = ({
           {/* 1. BRANDING & TITLE                                       */}
           {/* ========================================================= */}
           <div className="flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2.5 sm:gap-3 group cursor-default">
+            <div className="flex items-center gap-2 sm:gap-3 group cursor-default">
+              <button
+                type="button"
+                onClick={onOpenMobileMenu}
+                className="lg:hidden p-2 rounded-lg bg-[#0c0e16] text-slate-300 hover:text-white border border-white/[0.08] transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center mr-1"
+                title="Open navigation menu"
+                aria-label="Open navigation menu"
+              >
+                <Menu className="w-5 h-5 text-sky-400" />
+              </button>
               <div className="shrink-0 flex items-center justify-center transition-transform duration-200 group-hover:scale-105">
                 <MechanismLogo size={28} glow />
               </div>
@@ -339,11 +350,6 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
 
-            {/* 2.5 Gemini Model Indicator */}
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono bg-[#0c0e16] text-slate-300 border border-white/[0.06] shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.7)] animate-pulse" />
-              <span className="text-slate-300 font-medium">Gemini 3 Flash</span>
-            </div>
 
             {/* 2.6 David Profile Control with Compact Dropdown (Settings + Sign Out) */}
             <div className="relative shrink-0" ref={profileMenuRef}>

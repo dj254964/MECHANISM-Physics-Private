@@ -249,6 +249,15 @@ CREATE TABLE IF NOT EXISTS private_sessions (
   remember_me BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+CREATE TABLE IF NOT EXISTS wcc_academic_preferences (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  semester TEXT NOT NULL,
+  major_minor TEXT NOT NULL,
+  textbooks TEXT NOT NULL,
+  onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TEXT NOT NULL
+);
+
 -- ====================================================================
 -- Performance & Lookup Indexes
 -- ====================================================================

@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { MechanismLogo } from '../components/branding/MechanismLogo';
 import { PrivateSecuritySettings } from '../components/settings/PrivateSecuritySettings';
+import { WccSyllabusViewer } from '../components/wcc/WccSyllabusViewer';
 
 interface SystemSettingsData {
   provider: string;
@@ -72,7 +73,7 @@ export interface SettingsPageProps {
 export const SettingsPage: React.FC<SettingsPageProps> = ({ onDeleteAccountComplete }) => {
   const [settings, setSettings] = useState<SystemSettingsData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [activeSection, setActiveSection] = useState<'all' | 'tuning' | 'architecture' | 'security'>('all');
+  const [activeSection, setActiveSection] = useState<'all' | 'tuning' | 'security' | 'wcc'>('all');
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
 
   // User configurable engine preferences
@@ -217,73 +218,21 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onDeleteAccountCompl
               </button>
               <button
                 type="button"
-                onClick={() => setActiveSection('architecture')}
+                onClick={() => setActiveSection('wcc')}
                 className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
-                  activeSection === 'architecture'
+                  activeSection === 'wcc'
                     ? 'bg-cyan-600 text-slate-950 font-bold shadow'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Architecture
+                WCC Curriculum
               </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={fetchSettings}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-200 bg-[#101420] hover:bg-[#151a2b] border border-slate-700 transition-all cursor-pointer"
-              title="Refresh environment specifications"
-            >
-              <RefreshCw className={`w-4 h-4 text-cyan-400 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
-        </div>
-
-        {/* Status Telemetry Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-800/80 text-xs font-mono">
-          <div className="p-3 rounded-lg bg-[#07080C] border border-slate-800 space-y-1">
-            <div className="text-[10px] uppercase text-cyan-400 font-semibold">AI Reasoning Engine</div>
-            <div className="text-sm font-bold text-white truncate">
-              {settings?.model || 'gemini-3.8-flash'}
-            </div>
-            <div className="text-[10px] text-emerald-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span>Server-Side Proxied</span>
-            </div>
-          </div>
-
-          <div className="p-3 rounded-lg bg-[#07080C] border border-slate-800 space-y-1">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold">Storage Substrate</div>
-            <div className="text-sm font-bold text-white truncate">
-              SQLite WAL DatabaseSync
-            </div>
-            <div className="text-[10px] text-slate-400">
-              <span className="text-slate-300 font-bold">{settings?.tableCount || 17}</span> relational tables
-            </div>
-          </div>
-
-          <div className="p-3 rounded-lg bg-[#07080C] border border-slate-800 space-y-1">
-            <div className="text-[10px] uppercase text-emerald-400 font-semibold">Credential Isolation</div>
-            <div className="text-sm font-bold text-emerald-300 flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>Zero Browser Exposure</span>
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Encapsulated in backend
-            </div>
-          </div>
-
-          <div className="p-3 rounded-lg bg-[#07080C] border border-slate-800 space-y-1">
-            <div className="text-[10px] uppercase text-indigo-400 font-semibold">Container Ingress</div>
-            <div className="text-sm font-bold text-white">
-              0.0.0.0:3000
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Single-turn dispatch
             </div>
           </div>
         </div>
       </div>
+
+
 
       {/* Persistence / Feedback Notifications */}
       {savedSuccess && (
@@ -638,232 +587,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onDeleteAccountCompl
       )}
 
       {/* ========================================================= */}
-      {/* 4. TECHNICAL ARCHITECTURE & INFRASTRUCTURE MATRIX         */}
+      {/* 4. WCC CURRICULUM & TEXTBOOK REFERENCES                   */}
       {/* ========================================================= */}
-      {(activeSection === 'all' || activeSection === 'architecture') && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-            <div className="flex items-center gap-2">
-              <Server className="w-4 h-4 text-cyan-400" />
-              <h2 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
-                Subsystem Architecture & Security Telemetry
-              </h2>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest hidden sm:inline">
-              // VERIFIED RUNTIME SPECIFICATION
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* 4.1 Google Gemini AI Subsystem */}
-            <div className="p-5 md:p-6 rounded-xl border border-slate-800/90 bg-[#0C0E16] space-y-4 shadow-md">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-cyan-400" />
-                  <h3 className="text-sm font-semibold text-white">
-                    Google Gemini & AI Model Layer
-                  </h3>
-                </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-800/60">
-                  ACTIVE PROVIDER
-                </span>
-              </div>
-
-              <div className="space-y-2.5 text-xs">
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">AI Engine Provider</span>
-                  <span className="font-mono font-bold text-white">
-                    {settings?.provider || 'Google Gemini'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Target Reasoning Model</span>
-                  <span className="font-mono font-bold text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60">
-                    {settings?.model || 'gemini-3.8-flash'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">SDK Integration Standard</span>
-                  <span className="font-mono text-slate-200">
-                    {settings?.sdk || '@google/genai (Interactions API)'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Execution Protocol</span>
-                  <span className="font-mono text-slate-300 text-[11px]">
-                    Low-Latency Server Proxy & Prompt Caching
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5">
-                  <span className="text-slate-400">Cost & Rate Control</span>
-                  <span className="font-mono text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{settings?.costControl || 'Single-Turn Dispatch (Zero Duplicate Calls)'}</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* 4.2 Relational SQLite Database Subsystem */}
-            <div className="p-5 md:p-6 rounded-xl border border-slate-800/90 bg-[#0C0E16] space-y-4 shadow-md">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-violet-400" />
-                  <h3 className="text-sm font-semibold text-white">
-                    Relational SQLite Database Subsystem
-                  </h3>
-                </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-violet-950/80 text-violet-300 border border-violet-800/60">
-                  PERSISTENT WAL
-                </span>
-              </div>
-
-              <div className="space-y-2.5 text-xs">
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Database Driver</span>
-                  <span className="font-mono font-bold text-white">
-                    {settings?.databaseDriver || 'Node.js Native SQLite (node:sqlite DatabaseSync)'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Storage Target Path</span>
-                  <span className="font-mono text-slate-300 select-all">
-                    {settings?.databasePath || './data/mechanism.db'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Foreign Key Integrity</span>
-                  <span className="font-mono text-emerald-400">
-                    {settings?.foreignKeys || 'PRAGMA foreign_keys = ON (Enforced)'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Journal Mode</span>
-                  <span className="font-mono text-cyan-300">
-                    {settings?.journalMode || 'WAL (Write-Ahead Logging)'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5">
-                  <span className="text-slate-400">Active Relational Schema</span>
-                  <span className="font-mono text-white">
-                    {settings?.tableCount || 17} Registered Tables
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* 4.3 Secret Encapsulation & Credential Isolation */}
-            <div className="p-5 md:p-6 rounded-xl border border-slate-800/90 bg-[#0C0E16] space-y-4 shadow-md">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-sm font-semibold text-white">
-                    Security & Credential Encapsulation
-                  </h3>
-                </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/60">
-                  ZERO EXPOSURE
-                </span>
-              </div>
-
-              <div className="space-y-3 text-xs">
-                <div className="p-3 rounded-lg bg-[#07080C] border border-emerald-900/40 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-white">
-                        Browser Key Isolation
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Zero API keys are exposed or accessible in browser runtime
-                      </div>
-                    </div>
-                  </div>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/50">
-                    HARDENED
-                  </span>
-                </div>
-
-                <div className="space-y-2 text-slate-400 text-xs leading-relaxed">
-                  <div className="flex items-center justify-between py-1 border-b border-slate-800/70">
-                    <span>API Key Environment Status</span>
-                    <span className="font-mono text-emerald-400 font-bold">
-                      {settings?.hasApiKey ? 'KEY CONFIGURED & VERIFIED' : 'DEFAULT HOST KEY'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between py-1 border-b border-slate-800/70">
-                    <span>Client-Side Bundle Scrubbing</span>
-                    <span className="font-mono text-slate-200">
-                      process.env.GEMINI_API_KEY stripped from client bundle
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between py-1">
-                    <span>Proxy Routing Invariant</span>
-                    <span className="font-mono text-slate-200">
-                      All LLM dispatches proxied via internal /api/* endpoints
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 4.4 Ingress & Architecture Blueprint */}
-            <div className="p-5 md:p-6 rounded-xl border border-slate-800/90 bg-[#0C0E16] space-y-4 shadow-md">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <Network className="w-4 h-4 text-cyan-400" />
-                  <h3 className="text-sm font-semibold text-white">
-                    Container Ingress & Full-Stack Blueprint
-                  </h3>
-                </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-800/60">
-                  PORT 3000
-                </span>
-              </div>
-
-              <div className="space-y-2.5 text-xs">
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Container Ingress Port</span>
-                  <span className="font-mono font-bold text-white">
-                    0.0.0.0:3000 (Internal Reverse Proxy)
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Backend Server Entry</span>
-                  <span className="font-mono text-slate-200">
-                    Express v4 + tsx / esbuild (server.ts)
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-800/70">
-                  <span className="text-slate-400">Frontend Client Architecture</span>
-                  <span className="font-mono text-slate-200">
-                    React 18 + Vite SPA + Tailwind CSS
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between py-1.5">
-                  <span className="text-slate-400">Reasoning Workflow Loop</span>
-                  <span className="font-mono text-cyan-300 text-[11px]">
-                    Doubt → Compressor → Adversarial → Recall → Adaptive Profile
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+      {(activeSection === 'all' || activeSection === 'wcc') && (
+        <div id="wcc-syllabus" className="space-y-4">
+          <WccSyllabusViewer />
         </div>
       )}
+
+
 
       {/* ========================================================= */}
       {/* 5. CONFIRMATION MODAL FOR COGNITIVE BASELINE RESET        */}

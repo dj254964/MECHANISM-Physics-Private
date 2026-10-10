@@ -96,6 +96,95 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [editedTitle, setEditedTitle] = useState('');
 
+  // Chat Search Modal state
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [chatSearchScope, setChatSearchScope] = useState<'all' | 'this'>('all');
+  const [chatSearchResults, setChatSearchResults] = useState<any[]>([]);
+  const [chatSearchLoading, setChatSearchLoading] = useState(false);
+  const [chatSearchError, setChatSearchError] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Debounced search effect
+  useEffect(() => {
+    if (!isSearchModalOpen || !chatSearchQuery.trim()) {
+      setChatSearchResults([]);
+      setChatSearchLoading(false);
+      return;
+    }
+
+    setChatSearchLoading(true);
+    setChatSearchError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const scopeParam = chatSearchScope === 'this' && currentConversationId ? 'this' : 'all';
+        const convoParam = currentConversationId ? `&conversation_id=${currentConversationId}` : '';
+        const res = await fetch(`/api/chat/search?q=${encodeURIComponent(chatSearchQuery)}&scope=${scopeParam}${convoParam}`);
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setChatSearchResults(json.data);
+        } else {
+          setChatSearchResults([]);
+        }
+      } catch (e: any) {
+        setChatSearchError(e.message || 'Search failed');
+        setChatSearchResults([]);
+      } finally {
+        setChatSearchLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [chatSearchQuery, chatSearchScope, isSearchModalOpen, currentConversationId]);
+
+  // Focus search input when modal opens
+  useEffect(() => {
+    if (isSearchModalOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [isSearchModalOpen]);
+
+  // Handle selecting a search result
+  const handleSelectSearchResult = async (result: any) => {
+    const targetConvoId = result.conversation_id;
+    const targetMsgId = result.message_id;
+
+    setIsSearchModalOpen(false);
+    setChatSearchQuery('');
+
+    if (currentConversationId !== targetConvoId) {
+      await loadConversationDetails(targetConvoId);
+    }
+
+    setHighlightedMessageId(targetMsgId);
+
+    setTimeout(() => {
+      const el = document.getElementById(`msg-${targetMsgId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+
+    setTimeout(() => {
+      setHighlightedMessageId((prev) => (prev === targetMsgId ? null : prev));
+    }, 3000);
+  };
+
+  const renderHighlightedSnippet = (content: string, query: string) => {
+    if (!query.trim()) return content.slice(0, 140) + (content.length > 140 ? '...' : '');
+    const lowerContent = content.toLowerCase();
+    const lowerQuery = query.toLowerCase();
+    const idx = lowerContent.indexOf(lowerQuery);
+    if (idx === -1) {
+      return content.slice(0, 140) + (content.length > 140 ? '...' : '');
+    }
+    const start = Math.max(0, idx - 40);
+    const end = Math.min(content.length, idx + query.length + 60);
+    return (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : '');
+  };
+
   // File upload & camera state
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -666,14 +755,14 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
         </div>
 
         {/* Search Past Chats */}
-        <div className="p-3 border-b border-white/[0.08] bg-[#0c0e16]">
+        <div className="p-3 border-b border-white/[0.08] bg-[#0c0e16] space-y-2">
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
-              placeholder="Search previous doubts..."
+              placeholder="Filter session titles..."
               className="w-full pl-8 pr-3 py-1.5 rounded-md text-xs bg-[#101420] text-slate-200 placeholder-slate-500 border border-white/[0.08] focus:border-sky-500/50 focus:outline-none transition-colors"
             />
             {searchFilter && (
@@ -686,6 +775,15 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
               </button>
             )}
           </div>
+          <button
+            type="button"
+            onClick={() => setIsSearchModalOpen(true)}
+            className="w-full py-1.5 px-3 rounded-lg bg-[#101420] hover:bg-[#151c2e] text-sky-300 hover:text-white border border-sky-500/30 text-xs font-medium flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs"
+            title="Search messages across physics discussions"
+          >
+            <Search className="w-3.5 h-3.5 text-sky-400" />
+            <span>Deep Message Search</span>
+          </button>
         </div>
 
         {/* Conversations History List */}
@@ -812,7 +910,7 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
       </aside>
 
       {/* Main Physics Inquiry Laboratory Interface Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#07080c]">
+      <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0 max-w-full bg-[#07080c]">
         {/* Top Header Bar */}
         <header className="h-12 px-4 border-b border-white/[0.08] bg-[#0c0e16]/95 backdrop-blur-md flex items-center justify-between shrink-0 z-10">
           <div className="flex items-center gap-3 min-w-0">
@@ -844,6 +942,15 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsSearchModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-slate-300 hover:bg-[#101420] border border-white/[0.08] transition-colors cursor-pointer"
+              title="Search messages and doubt sessions"
+            >
+              <Search className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden sm:inline">Search Chats</span>
+            </button>
             <button
               type="button"
               onClick={handleStartNewChat}
@@ -931,7 +1038,7 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
         )}
 
         {/* Middle: Scrollable Messages Container */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 space-y-6">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8 space-y-6 min-w-0 max-w-full">
           {messages.length === 0 ? (
             <div className="max-w-3xl mx-auto py-8 md:py-12 flex flex-col items-center text-center space-y-6 animate-fadeIn">
               <div className="w-12 h-12 rounded-xl bg-[#101420] border border-sky-500/30 flex items-center justify-center text-sky-400 shadow-[0_0_20px_rgba(56,189,248,0.15)]">
@@ -999,7 +1106,7 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
               </div>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto space-y-6">
+            <div className="max-w-4xl mx-auto space-y-6 min-w-0 max-w-full">
               {messages.map((m) => {
                 const isUser = m.role === 'user';
                 const hasAttachments = m.attachments && m.attachments.length > 0;
@@ -1007,13 +1114,18 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
                 return (
                   <div
                     key={m.id}
-                    className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-2`}
+                    id={`msg-${m.id}`}
+                    className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-2 w-full min-w-0 max-w-full`}
                   >
                     {/* Message Bubble Container */}
                     <div
-                      className={`rounded-2xl text-sm transition-all ${
+                      className={`rounded-2xl text-sm transition-all min-w-0 max-w-full box-border break-words [overflow-wrap:anywhere] ${
+                        highlightedMessageId === m.id
+                          ? 'ring-2 ring-sky-400 bg-sky-950/40 shadow-[0_0_25px_rgba(56,189,248,0.3)] transition-all duration-500 '
+                          : ''
+                      } ${
                         isUser
-                          ? 'bg-[#0d1527] border border-sky-500/30 text-slate-100 shadow-md rounded-br-xs p-4 md:p-5 max-w-2xl'
+                          ? 'bg-[#0d1527] border border-sky-500/30 text-slate-100 shadow-md rounded-br-xs p-4 md:p-5 max-w-2xl w-full'
                           : 'bg-[#0c0e16] border border-white/[0.08] text-slate-200 shadow-sm rounded-bl-xs p-5 md:p-6 w-full'
                       }`}
                     >
@@ -1098,7 +1210,7 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
                       {/* Content Text */}
                       {isUser ? (
                         <div className="space-y-2">
-                          <p className="whitespace-pre-wrap leading-relaxed text-sm md:text-[15px] font-normal text-slate-100">
+                          <p className="whitespace-pre-wrap leading-relaxed text-sm md:text-[15px] font-normal text-slate-100 break-words [overflow-wrap:anywhere] min-w-0 max-w-full">
                             {m.content}
                           </p>
                           <div className="flex items-center justify-end gap-1 pt-1 opacity-60 hover:opacity-100 transition-opacity">
@@ -1212,8 +1324,8 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
         </div>
 
         {/* Bottom Docked AI Reasoning Console Container */}
-        <div className="border-t border-white/[0.08] bg-[#0c0e16] p-3 md:p-4 shrink-0 shadow-2xl">
-          <div className="max-w-4xl mx-auto space-y-2">
+        <div className="border-t border-white/[0.08] bg-[#0c0e16] p-3 md:p-4 shrink-0 shadow-2xl min-w-0 max-w-full">
+          <div className="max-w-4xl mx-auto space-y-2 min-w-0 max-w-full">
             {/* File Error Notice if any file exceeds 100MB or unsupported */}
             {fileError && (
               <div className="p-2.5 rounded-lg border border-amber-800/80 bg-amber-950/40 text-amber-200 text-xs flex items-center justify-between gap-2">
@@ -1617,6 +1729,160 @@ export const DoubtChatPage: React.FC<DoubtChatPageProps> = ({
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chat Search Modal */}
+      {isSearchModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-start justify-center pt-16 md:pt-24 px-4 animate-fadeIn"
+          onClick={() => setIsSearchModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl bg-[#0b0f19]/95 backdrop-blur-2xl border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header & Search Input */}
+            <div className="p-4 border-b border-white/[0.08] bg-[#0c0e16]/95 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-slate-200">
+                  <Search className="w-4 h-4 text-sky-400" />
+                  <span className="font-semibold text-sm">Search Physics Discussions</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSearchModalOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Search Scope Tabs ("This Chat" vs "All Chats") */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={chatSearchQuery}
+                    onChange={(e) => setChatSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setIsSearchModalOpen(false);
+                    }}
+                    placeholder="Search query across user doubts and AI responses..."
+                    className="w-full pl-9 pr-9 py-2 rounded-xl text-xs md:text-sm bg-[#101420] text-slate-100 placeholder-slate-500 border border-white/[0.12] focus:border-sky-500 focus:ring-1 focus:ring-sky-500/40 focus:outline-none transition-all"
+                  />
+                  {chatSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setChatSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center rounded-lg bg-[#101420] p-1 border border-white/[0.08] shrink-0 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setChatSearchScope('all')}
+                    className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                      chatSearchScope === 'all'
+                        ? 'bg-sky-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    All Chats
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChatSearchScope('this')}
+                    className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                      chatSearchScope === 'this'
+                        ? 'bg-sky-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    disabled={!currentConversationId}
+                    title={!currentConversationId ? 'Select a conversation first' : 'Search within current conversation'}
+                  >
+                    This Chat
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Results List */}
+            <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-2">
+              {chatSearchLoading ? (
+                <div className="py-12 flex flex-col items-center justify-center space-y-3 text-slate-400">
+                  <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
+                  <span className="text-xs font-mono">Searching message index across physics sessions...</span>
+                </div>
+              ) : chatSearchError ? (
+                <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-200 text-xs text-center">
+                  {chatSearchError}
+                </div>
+              ) : !chatSearchQuery.trim() ? (
+                <div className="py-12 text-center text-xs text-slate-500 space-y-2">
+                  <Search className="w-8 h-8 mx-auto opacity-20 text-slate-400" />
+                  <p>Type keywords, equations, or concepts to search your doubt history.</p>
+                </div>
+              ) : chatSearchResults.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-500 space-y-2">
+                  <MessageSquare className="w-8 h-8 mx-auto opacity-20 text-slate-400" />
+                  <p>No matching messages found for "{chatSearchQuery}".</p>
+                  <p className="text-[11px] text-slate-600">Try broadening your search terms or switching search scope.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-mono text-slate-400 px-2 pb-1">
+                    Found {chatSearchResults.length} matching message{chatSearchResults.length > 1 ? 's' : ''}:
+                  </div>
+                  {chatSearchResults.map((res) => (
+                    <div
+                      key={res.message_id}
+                      onClick={() => handleSelectSearchResult(res)}
+                      className="group p-3 rounded-xl bg-[#101420]/80 hover:bg-[#151c2e] border border-white/[0.08] hover:border-sky-500/40 cursor-pointer transition-all space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <MessageSquare className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                          <span className="font-semibold text-slate-200 truncate group-hover:text-sky-300 transition-colors">
+                            {res.conversation_title || 'Physics Session'}
+                          </span>
+                          {res.topic_name && (
+                            <span className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#160f22] text-violet-300 border border-violet-900/30">
+                              {res.topic_name}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                          {res.role === 'user' ? 'You' : 'AI'} • {new Date(res.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed font-sans pl-5">
+                        {renderHighlightedSnippet(res.content, chatSearchQuery)}
+                      </p>
+
+                      <div className="flex items-center justify-end gap-1 text-[10px] font-medium text-sky-400 opacity-0 group-hover:opacity-100 transition-opacity pt-1">
+                        <span>Jump to message</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-white/[0.08] bg-[#090b10] flex items-center justify-between text-[11px] text-slate-500">
+              <span className="font-mono">Press Escape to close</span>
+              <span className="font-mono text-sky-400">MECHANISM Search v2.4</span>
             </div>
           </div>
         </div>

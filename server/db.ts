@@ -433,6 +433,15 @@ export async function initDatabase(): Promise<void> {
         remember_me BOOLEAN NOT NULL DEFAULT FALSE
       );
 
+      CREATE TABLE IF NOT EXISTS wcc_academic_preferences (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        semester TEXT NOT NULL,
+        major_minor TEXT NOT NULL,
+        textbooks TEXT NOT NULL,
+        onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_user ON adaptive_evidence(user_id);
       CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_error ON adaptive_evidence(error_id);
       CREATE INDEX IF NOT EXISTS idx_adaptive_evidence_feature ON adaptive_evidence(feature);
@@ -718,6 +727,16 @@ export async function initDatabase(): Promise<void> {
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
         remember_me INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS wcc_academic_preferences (
+        user_id TEXT PRIMARY KEY,
+        semester TEXT NOT NULL,
+        major_minor TEXT NOT NULL,
+        textbooks TEXT NOT NULL,
+        onboarding_completed INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
       );
     `);
 

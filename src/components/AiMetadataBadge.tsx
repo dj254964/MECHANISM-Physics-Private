@@ -9,8 +9,6 @@ interface AiMetadataBadgeProps {
 }
 
 export const AiMetadataBadge: React.FC<AiMetadataBadgeProps> = ({
-  provider = 'MECHANISM',
-  model = 'gemini-3.7-flash',
   timestamp,
   classification,
 }) => {
@@ -22,14 +20,8 @@ export const AiMetadataBadge: React.FC<AiMetadataBadgeProps> = ({
     <div className="flex flex-wrap items-center gap-2 text-xs py-1 px-2.5 rounded-md bg-[#101420] border border-white/[0.08] text-slate-300 w-fit shadow-xs">
       <div className="flex items-center gap-1.5 font-medium text-sky-300">
         <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-        <span className="font-mono text-[11px]">{provider}</span>
+        <span className="font-sans text-[11px] font-semibold text-slate-200">Verified Analysis</span>
       </div>
-
-      <span className="text-slate-700">•</span>
-
-      <span className="font-mono text-[10px] text-slate-400">
-        {model}
-      </span>
 
       {classification && (
         <>

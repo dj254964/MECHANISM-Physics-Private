@@ -25,6 +25,14 @@ import {
   INITIAL_HIERARCHICAL_ERRORS,
   CURATED_DIAGNOSTIC_QUESTIONS,
 } from './adaptive_engine.ts';
+import {
+  WCC_CURRICULUM_METADATA,
+  WCC_BSC_PHYSICS_CURRICULUM,
+  STANDARD_TEXTBOOKS,
+  getUserWccPreferences,
+  saveUserWccPreferences,
+  getWccContextPrompt,
+} from './wcc_curriculum.ts';
 
 const app = express();
 
@@ -50,6 +58,56 @@ app.post('/api/auth/change-password', handleChangePassword);
 app.get('/api/auth/recovery-clue', handleGetRecoveryClue);
 app.post('/api/auth/delete-account', handleDeleteAccount);
 app.delete('/api/auth/account', handleDeleteAccount);
+
+// WCC Academic & Textbook Preferences Endpoints
+app.get('/api/wcc/curriculum', async (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        metadata: WCC_CURRICULUM_METADATA,
+        semesters: WCC_BSC_PHYSICS_CURRICULUM,
+        textbooks: STANDARD_TEXTBOOKS
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/wcc/preferences', async (req: Request, res: Response) => {
+  try {
+    const userId = await getAuthenticatedUserId(req);
+    const prefs = await getUserWccPreferences(userId);
+    res.json({ success: true, data: prefs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/wcc/preferences', async (req: Request, res: Response) => {
+  try {
+    const userId = await getAuthenticatedUserId(req);
+    const { semester, major_minor, textbooks } = req.body;
+    if (!semester) {
+      return res.status(400).json({ success: false, error: 'Semester is required' });
+    }
+
+    const prefs = {
+      user_id: userId,
+      semester,
+      major_minor: major_minor || 'B.Sc. Physics Core',
+      textbooks: Array.isArray(textbooks) ? textbooks : ['halliday_resnick', 'beiser_modern', 'griffiths_em'],
+      onboarding_completed: true,
+      updated_at: new Date().toISOString()
+    };
+
+    await saveUserWccPreferences(prefs);
+    res.json({ success: true, data: prefs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Subjects
 app.get('/api/subjects', async (req: Request, res: Response) => {
@@ -467,6 +525,44 @@ app.get('/api/chat/conversations', async (req: Request, res: Response) => {
   }
 });
 
+// Search Chat Messages across conversations
+app.get('/api/chat/search', async (req: Request, res: Response) => {
+  try {
+    const q = (req.query.q as string || '').trim();
+    const scope = (req.query.scope as string || 'all');
+    const conversationId = req.query.conversation_id as string | undefined;
+    const userId = await getAuthenticatedUserId(req);
+
+    if (!q) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const searchTerm = `%${q.toLowerCase()}%`;
+
+    let sql = `
+      SELECT m.id as message_id, m.conversation_id, m.role, m.content, m.created_at,
+             c.title as conversation_title, t.name as topic_name
+      FROM chat_messages m
+      JOIN chat_conversations c ON m.conversation_id = c.id
+      LEFT JOIN topics t ON c.topic_id = t.id
+      WHERE c.user_id = ? AND (LOWER(m.content) LIKE ? OR LOWER(c.title) LIKE ?)
+    `;
+    const params: any[] = [userId, searchTerm, searchTerm];
+
+    if (scope === 'this' && conversationId) {
+      sql += ` AND m.conversation_id = ?`;
+      params.push(conversationId);
+    }
+
+    sql += ` ORDER BY m.created_at DESC LIMIT 60`;
+
+    const rows = await db.all(sql, ...params);
+    res.json({ success: true, data: rows });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/chat/conversations', async (req: Request, res: Response) => {
   try {
     const { title, topic_id } = req.body;
@@ -650,9 +746,13 @@ ${flawContext.prompt_injection}`;
       name: a.name,
     })) : undefined;
 
-    // Single call to Gemini API
+    // Get WCC academic curriculum context
+    const wccSystemContext = await getWccContextPrompt(userId);
+
+    // Single call to Gemini API with WCC grounding
     const geminiResult = await queryGemini({
       prompt: promptToUse,
+      systemInstruction: wccSystemContext,
       history: historyRows,
       attachments: geminiAttachments,
     });
@@ -839,6 +939,7 @@ const handleCompressorEvaluate = async (req: Request, res: Response) => {
 
     const userId = await getAuthenticatedUserId(req);
     const flawContext = await getUserCognitiveFlawSummary(userId);
+    const wccContext = await getWccContextPrompt(userId);
 
     const prompt = `You are evaluating a BSc Physics student's dynamical mechanism explanation for MECHANISM COMPRESSOR.
 Topic: ${title || 'Classical / Quantum / Electromagnetic Mechanism'}
@@ -846,6 +947,8 @@ Student Explanation:
 """
 ${user_explanation}
 """
+
+${wccContext}
 
 Evaluate with mathematical and physical rigor:
 - Causal accuracy
@@ -1019,6 +1122,7 @@ app.post('/api/adversarial/attack', async (req: Request, res: Response) => {
     const { model_text, attack_type } = req.body;
     const userId = await getAuthenticatedUserId(req);
     const flawContext = await getUserCognitiveFlawSummary(userId);
+    const wccContext = await getWccContextPrompt(userId);
 
     let instructionTarget = '';
     switch (attack_type) {
@@ -1041,6 +1145,8 @@ app.post('/api/adversarial/attack', async (req: Request, res: Response) => {
     const prompt = `Adversarial BSc Physics Evaluation Mode:
 Target Focus: ${attack_type}
 Directive: ${instructionTarget}
+
+${wccContext}
 
 Student's Working Model:
 """
@@ -1082,9 +1188,12 @@ app.post('/api/first-principles', async (req: Request, res: Response) => {
     const { topic_or_concept } = req.body;
     const userId = await getAuthenticatedUserId(req);
     const flawContext = await getUserCognitiveFlawSummary(userId);
+    const wccContext = await getWccContextPrompt(userId);
 
     const prompt = `FIRST-PRINCIPLES PHYSICS RECONSTRUCTION:
 Concept to Deconstruct: "${topic_or_concept}"
+
+${wccContext}
 
 Ask and answer the fundamental question:
 "What is the SMALLEST set of physical laws, conservation axioms, and symmetries from which this entire dynamical mechanism can be derived?"
@@ -1123,12 +1232,15 @@ app.post('/api/reverse-engineering', async (req: Request, res: Response) => {
     const { observation, user_hypotheses } = req.body;
     const userId = await getAuthenticatedUserId(req);
     const flawContext = await getUserCognitiveFlawSummary(userId);
+    const wccContext = await getWccContextPrompt(userId);
 
     const prompt = `REVERSE-ENGINEERING MODE:
 Physical / Experimental Observation:
 """
 ${observation}
 """
+
+${wccContext}
 
 ${user_hypotheses ? `User Proposed Hypotheses:\n"""\n${user_hypotheses}\n"""\n` : ''}
 
@@ -1427,6 +1539,7 @@ app.post('/api/tests/generate-dynamic', async (req: Request, res: Response) => {
       unresolved_questions,
     } = req.body;
     const userId = await getAuthenticatedUserId(req);
+    const wccContext = await getWccContextPrompt(userId);
     const row = await db.get('SELECT error_profile FROM user_model WHERE user_id = ?', userId) as any;
     let errors = INITIAL_HIERARCHICAL_ERRORS;
     if (row?.error_profile) {
@@ -1446,7 +1559,7 @@ app.post('/api/tests/generate-dynamic', async (req: Request, res: Response) => {
       difficulty: difficulty || 'Mechanistic',
       question_format: question_format || 'mcq',
       detected_gaps,
-      context_summary,
+      context_summary: [context_summary, wccContext].filter(Boolean).join('\n'),
       unresolved_questions,
     });
 
@@ -1523,6 +1636,7 @@ app.post('/api/reconstructions', async (req: Request, res: Response) => {
     const topic = await db.get('SELECT * FROM topics WHERE id = ?', topic_id) as any;
     const mech = await db.get('SELECT * FROM mechanisms WHERE topic_id = ?', topic_id) as any;
     const flawContext = await getUserCognitiveFlawSummary(userId);
+    const wccContext = await getWccContextPrompt(userId);
 
     let studentInputSection = '';
     if (paragraph_explanation && paragraph_explanation.trim()) {
@@ -1540,6 +1654,8 @@ app.post('/api/reconstructions', async (req: Request, res: Response) => {
     const prompt = `EVALUATE CLOSE-BOOK MECHANISM RECONSTRUCTION:
 Topic: ${topic ? topic.name : 'Physics / Dynamical Mechanisms'}
 Mode of Explanation Submitted: ${explanation_mode}
+
+${wccContext}
 
 Canonical Benchmark Mechanism:
 """

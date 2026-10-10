@@ -146,10 +146,7 @@ export function formatPhysicsMathAndOperators(rawText: string): string {
     .replace(/\$CO_2\$/g, 'CO₂')
     .replace(/\$H_2O\$/g, 'H₂O');
 
-  // Clean trailing dollar signs for ion/particle superscripts if any left
   text = text.replace(/(e⁻|e⁺|Ca²⁺|Na⁺|K⁺|Cl⁻|H⁺|Mg²⁺|HCO₃⁻)\$/g, '$1');
-
-  // 6. General subscript pattern $X_{abc}$ or $X_a$ where X is a letter, if not already captured
   text = text.replace(/\$([A-Za-z])_\{([A-Za-z0-9,]+)\}\$/g, '*$1*<sub>$2</sub>');
 
   return text;
@@ -159,54 +156,54 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
   const sanitizedContent = useMemo(() => formatPhysicsMathAndOperators(content), [content]);
 
   return (
-    <div className={`markdown-body space-y-3 leading-relaxed text-sm md:text-base text-slate-200 ${className}`}>
+    <div className={`markdown-body space-y-3 leading-relaxed text-sm md:text-base text-slate-200 min-w-0 max-w-full overflow-x-hidden ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex, rehypeRaw]}
         components={{
           h1: ({ children }) => (
-            <h1 className="text-lg md:text-xl font-bold font-sans tracking-tight text-slate-100 border-b border-white/[0.08] pb-2 mt-4 mb-2">
+            <h1 className="text-lg md:text-xl font-bold font-sans tracking-tight text-slate-100 border-b border-white/[0.08] pb-2 mt-4 mb-2 break-words [overflow-wrap:anywhere]">
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="text-base md:text-lg font-bold font-sans tracking-tight text-slate-100 mt-4 mb-2 flex items-center gap-2">
+            <h2 className="text-base md:text-lg font-bold font-sans tracking-tight text-slate-100 mt-4 mb-2 flex items-center gap-2 break-words [overflow-wrap:anywhere]">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-400 inline-block shrink-0 shadow-[0_0_6px_rgba(56,189,248,0.7)]" />
-              <span>{children}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{children}</span>
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="text-sm font-semibold text-sky-300 mt-3 mb-1 uppercase tracking-wider font-mono">
+            <h3 className="text-sm font-semibold text-sky-300 mt-3 mb-1 uppercase tracking-wider font-mono break-words [overflow-wrap:anywhere]">
               {children}
             </h3>
           ),
           h4: ({ children }) => (
-            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider font-mono mt-2 mb-1">
+            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider font-mono mt-2 mb-1 break-words [overflow-wrap:anywhere]">
               {children}
             </h4>
           ),
           p: ({ children }) => (
-            <p className="text-slate-200 my-2 leading-relaxed text-sm md:text-[15px]">
+            <p className="text-slate-200 my-2 leading-relaxed text-sm md:text-[15px] break-words [overflow-wrap:anywhere] min-w-0">
               {children}
             </p>
           ),
           ul: ({ children }) => (
-            <ul className="list-disc pl-5 space-y-1.5 text-slate-200 my-2">
+            <ul className="list-disc pl-5 space-y-1.5 text-slate-200 my-2 min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="list-decimal pl-5 space-y-1.5 text-slate-200 my-2">
+            <ol className="list-decimal pl-5 space-y-1.5 text-slate-200 my-2 min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
               {children}
             </ol>
           ),
           li: ({ children }) => (
-            <li className="leading-relaxed pl-1 marker:text-sky-400">
+            <li className="leading-relaxed pl-1 marker:text-sky-400 break-words [overflow-wrap:anywhere] min-w-0">
               {children}
             </li>
           ),
           strong: ({ children }) => (
-            <strong className="font-semibold text-white">
+            <strong className="font-semibold text-white break-words [overflow-wrap:anywhere]">
               {children}
             </strong>
           ),
@@ -221,13 +218,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
             </sup>
           ),
           blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-sky-400 pl-3.5 py-1.5 my-3 bg-[#101420] text-slate-300 italic rounded-r border-t-0 border-b-0 border-r-0">
+            <blockquote className="border-l-2 border-sky-400 pl-3.5 py-1.5 my-3 bg-[#101420] text-slate-300 italic rounded-r border-t-0 border-b-0 border-r-0 max-w-full break-words [overflow-wrap:anywhere]">
               {children}
             </blockquote>
           ),
           table: ({ children }) => (
-            <div className="overflow-x-auto my-4 rounded-lg border border-white/[0.08] bg-[#0c0e16]">
-              <table className="w-full text-left text-xs md:text-sm border-collapse">
+            <div className="overflow-x-auto max-w-full my-4 rounded-lg border border-white/[0.08] bg-[#0c0e16]">
+              <table className="w-full text-left text-xs md:text-sm border-collapse min-w-[300px]">
                 {children}
               </table>
             </div>
@@ -248,24 +245,26 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
             </tr>
           ),
           th: ({ children }) => (
-            <th className="px-3.5 py-2.5 font-medium text-slate-200">{children}</th>
+            <th className="px-3.5 py-2.5 font-medium text-slate-200 break-words">{children}</th>
           ),
           td: ({ children }) => (
-            <td className="px-3.5 py-2.5 text-slate-300">{children}</td>
+            <td className="px-3.5 py-2.5 text-slate-300 break-words">{children}</td>
           ),
           code: ({ children, className }) => {
             const isInline = !className;
             if (isInline) {
               return (
-                <code className="font-mono text-xs md:text-sm px-1.5 py-0.5 rounded bg-[#101420] text-sky-300 border border-white/[0.08]">
+                <code className="font-mono text-xs md:text-sm px-1.5 py-0.5 rounded bg-[#101420] text-sky-300 border border-white/[0.08] break-all">
                   {children}
                 </code>
               );
             }
             return (
-              <pre className="overflow-x-auto p-3.5 rounded-lg bg-[#0a0c14] border border-white/[0.08] text-slate-200 font-mono text-xs my-2.5">
-                <code>{children}</code>
-              </pre>
+              <div className="max-w-full overflow-x-auto my-2.5 rounded-lg border border-white/[0.08] bg-[#0a0c14]">
+                <pre className="p-3.5 text-slate-200 font-mono text-xs whitespace-pre">
+                  <code>{children}</code>
+                </pre>
+              </div>
             );
           },
           hr: () => (
@@ -278,4 +277,3 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
     </div>
   );
 };
-
